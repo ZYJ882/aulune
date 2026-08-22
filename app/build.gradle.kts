@@ -21,8 +21,8 @@ android {
         applicationId = "app.aulune.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100000033
-        versionName = "1.7.0"
+        versionCode = 100000034
+        versionName = "1.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
