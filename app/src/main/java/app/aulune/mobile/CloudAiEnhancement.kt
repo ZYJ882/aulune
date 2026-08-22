@@ -10,10 +10,15 @@ data class CloudAiConfig(
     val provider: AiProvider = AiProvider.OpenAI,
     val apiKey: String = "",
     val model: String = "",
+    val baseUrl: String = "",
+    val protocol: ProviderProtocol? = null,
     val enabled: Boolean = false
 ) {
     val effectiveModel: String get() = model.ifBlank { provider.defaultModel }
+    val effectiveBaseUrl: String get() = baseUrl.ifBlank { provider.defaultBaseUrl }
+    val effectiveProtocol: ProviderProtocol get() = protocol ?: provider.protocol
     val isUsable: Boolean get() = enabled && apiKey.isNotBlank()
+    fun providerSettings(): ProviderSettings = ProviderSettings(apiKey, effectiveModel, effectiveBaseUrl, effectiveProtocol)
 }
 
 class SecureCloudAiSettings(context: Context) {
@@ -30,6 +35,8 @@ class SecureCloudAiSettings(context: Context) {
             provider = AiProvider.valueOf(preferences.getString("provider", AiProvider.OpenAI.name).orEmpty()),
             apiKey = preferences.getString("api_key", "").orEmpty(),
             model = preferences.getString("model", "").orEmpty(),
+            baseUrl = preferences.getString("base_url", "").orEmpty(),
+            protocol = preferences.getString("protocol", "").orEmpty().takeIf { it.isNotBlank() }?.let(ProviderProtocol::valueOf),
             enabled = preferences.getBoolean("enabled", false)
         )
     }.getOrDefault(CloudAiConfig())
@@ -39,6 +46,8 @@ class SecureCloudAiSettings(context: Context) {
             .putString("provider", config.provider.name)
             .putString("api_key", config.apiKey.trim())
             .putString("model", config.model.trim())
+            .putString("base_url", config.baseUrl.trim())
+            .putString("protocol", config.protocol?.name.orEmpty())
             .putBoolean("enabled", config.enabled)
             .apply()
     }
@@ -69,7 +78,7 @@ class CloudAiSemanticService(private val client: LlmClient = LlmClient()) {
             ConversationMessage(1, false, "你是内容分类器。只返回 JSON，不要 Markdown。字段：theme（格式为 大类 · 小类）、topicGroup（2-6 字大类）、seriesKey（稳定系列名；不确定为空字符串）、insight（不超过 42 个中文字符的推荐理由）。", ""),
             ConversationMessage(2, true, "标题：${item.title}\n摘要：${item.summary.take(900)}\n来源：${item.source}\n当前规则主题：${item.theme}", "")
         )
-        return client.generate(config.provider, ProviderSettings(config.apiKey, config.effectiveModel), messages)
+        return client.generate(config.provider, config.providerSettings(), messages)
             .mapCatching { text ->
                 val payload = JSONObject(extractJson(text))
                 CloudContentAnalysis(
@@ -96,7 +105,7 @@ class CloudAiSemanticService(private val client: LlmClient = LlmClient()) {
             ConversationMessage(1, false, "你是用户画像候选生成器。只返回 JSON，不要 Markdown。字段：valuesCandidate（不超过80字，必须表述为可供用户确认的长期方向，不是事实断言）、coreCandidate（不超过80字，必须明确为可选边界建议）。不可编造个人敏感信息。", ""),
             ConversationMessage(2, true, "会话意图：${intent.label}\n本机事件数：$eventCount\n聚合兴趣证据：$evidence", "")
         )
-        return client.generate(config.provider, ProviderSettings(config.apiKey, config.effectiveModel), messages)
+        return client.generate(config.provider, config.providerSettings(), messages)
             .mapCatching { text ->
                 val payload = JSONObject(extractJson(text))
                 CloudProfileAnalysis(

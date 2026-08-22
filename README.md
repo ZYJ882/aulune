@@ -28,7 +28,7 @@ Aulune 使用 **Kotlin、Jetpack Compose 与 Material 3** 独立实现，应用�
 | 本地画像反馈 | 长期方向与核心边界可确认写入，也可“重新观察”以由后续本机行为重新生成候选 |
 | 多平台导入 | B站提供公开与账户内容读取；其余来源标记为试验性直连，并显示公开/账户/内容能力矩阵 |
 | 来源可靠性反馈 | 对网络、登录、限流、服务端和格式错误分类展示；可重试错误最多自动退避重试 3 次 |
-| 多模型文本对话 | 可配置 OpenAI、Claude、Gemini、DeepSeek 的 API Key 与模型名称；请求从设备通过 HTTPS 直连服务商 |
+| 多服务商云端模型 | 可配置 OpenAI、Claude、Gemini、DeepSeek、智谱 GLM、Kimi、OpenRouter 与自定义服务商；每项均可编辑 HTTPS 基础地址、选择协议、获取模型列表或手动填写模型名 |
 | 自定义品牌资源 | 独立应用名称、包名、主题与 Android 多密度启动器图标 |
 | 自动构建与发布 | 每次主分支更新或受控源码压缩包上传都会自动构建固定签名 APK、递增内部版本并创建 GitHub Release |
 
@@ -61,7 +61,7 @@ Aulune 使用 **Kotlin、Jetpack Compose 与 Material 3** 独立实现，应用�
 
 Aulune 的 B 站能力使用隔离的官方网页会话。登录、二维码、短信、密码和安全验证由 B 站官方页面完成；Aulune 不提供密码或 Cookie 导入表单，也不读取、不导出 `SESSDATA`、`bili_jct`、CSRF 或访问令牌。内嵌页面仅允许 HTTPS 下的 B 站可信域名导航；“清除网页会话”只清除 Aulune 容器中的 Cookie，不影响官方 B 站客户端。
 
-多模型请求会从设备 HTTPS 直连选定服务商。使用者只应填写自己拥有并获授权使用的 API Key，并自行承担相关服务商的数据处理、用量和计费责任。
+多模型请求会从设备 HTTPS 直连选定服务商。API Key、模型名、基础地址与协议使用 Android Keystore 加密保存在本机；模型列表获取失败时仍可手动填写模型名。使用者只应填写自己拥有并获授权使用的 API Key，并自行承担相关服务商的数据处理、用量和计费责任。Aulune 不包含本地模型或向量嵌入功能，以避免额外的设备内存占用。详细接口适配和官方资料见 [多服务商接入说明](docs/model-providers.md)。
 
 ## 构建与安装
 
@@ -83,10 +83,11 @@ aulune/
 ├── app/src/main/java/app/aulune/mobile/
 │   ├── MainActivity.kt             # Compose 主界面、导航和交互
 │   ├── AppData.kt                  # 本地状态、模型配置与离线内容
-│   ├── LlmClient.kt                # 四家模型服务的 HTTPS 调用与解析
+│   ├── LlmClient.kt                # 可编辑端点的多协议模型调用与目录解析
 │   ├── BilibiliLoginActivity.kt    # 四方式认证入口的 Compose 引导页
 │   └── BilibiliWebActivity.kt      # 受控官方网页账号管理容器
 ├── assets/                          # 独立品牌图标源图
+├── docs/model-providers.md         # 多服务商协议、端点与官方资料
 ├── docs/releases/                  # 各版本发布说明
 ├── releases/                        # 各版本 APK 副本
 ├── PROJECT_SCOPE.md                 # 参考来源、功能映射和未实现边界

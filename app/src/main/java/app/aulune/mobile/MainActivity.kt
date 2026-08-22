@@ -110,7 +110,8 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
 
 @Composable
 private fun AuluneApp() {
-    val store = remember { AuluneStore() }
+    val appContext = LocalContext.current.applicationContext
+    val store = remember { AuluneStore(appContext) }
     val llmClient = remember { LlmClient() }
     val localFeedViewModel: LocalFeedViewModel = viewModel()
     val localLibraryViewModel: LocalLibraryViewModel = viewModel()
@@ -667,7 +668,7 @@ private fun TalkScreen(
     val messages by conversationViewModel.messages.collectAsState()
     val isGenerating by conversationViewModel.isGenerating.collectAsState()
     val status by conversationViewModel.status.collectAsState()
-    val activeSettings = store.providerSettings[store.selectedProvider] ?: ProviderSettings(model = store.selectedProvider.defaultModel)
+    val activeSettings = store.settingsFor(store.selectedProvider)
     LaunchedEffect(messages.size, isGenerating) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
@@ -757,10 +758,28 @@ private fun ThinkingBubble(provider: String) {
 @Composable
 private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFeedViewModel) {
     val localState by localFeedViewModel.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
     var editingProvider by rememberSaveable { mutableStateOf(store.selectedProvider) }
-    var apiKey by rememberSaveable(editingProvider) { mutableStateOf(store.providerSettings[editingProvider]?.apiKey.orEmpty()) }
-    var model by rememberSaveable(editingProvider) { mutableStateOf(store.providerSettings[editingProvider]?.model ?: editingProvider.defaultModel) }
-    val configured = store.providerSettings.keys
+    var apiKey by rememberSaveable(editingProvider) { mutableStateOf(store.settingsFor(editingProvider).apiKey) }
+    var model by rememberSaveable(editingProvider) { mutableStateOf(store.settingsFor(editingProvider).effectiveModel(editingProvider)) }
+    var baseUrl by rememberSaveable(editingProvider) { mutableStateOf(store.settingsFor(editingProvider).effectiveBaseUrl(editingProvider)) }
+    var protocol by rememberSaveable(editingProvider) { mutableStateOf(store.settingsFor(editingProvider).effectiveProtocol(editingProvider)) }
+    var remoteModels by rememberSaveable(editingProvider) { mutableStateOf(emptyList<String>()) }
+    var modelStatus by rememberSaveable(editingProvider) { mutableStateOf("可手动填写模型名，或用 API Key 获取列表。") }
+    var isLoadingModels by rememberSaveable(editingProvider) { mutableStateOf(false) }
+    val configured = store.providerSettings.filterValues { it.apiKey.isNotBlank() }.keys
+
+    fun switchProvider(provider: AiProvider) {
+        editingProvider = provider
+        val saved = store.settingsFor(provider)
+        apiKey = saved.apiKey
+        model = saved.effectiveModel(provider)
+        baseUrl = saved.effectiveBaseUrl(provider)
+        protocol = saved.effectiveProtocol(provider)
+        remoteModels = emptyList()
+        modelStatus = "可手动填写模型名，或用 API Key 获取列表。"
+        store.selectProvider(provider)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -770,7 +789,7 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
         item {
             Text("模型工作台", color = Ink, fontSize = 27.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(5.dp))
-            Text("接入你自己的 API Key。启用云端增强后，内容元数据与聚合兴趣会从你的设备通过 HTTPS 直连模型服务。密钥由 Android Keystore 加密保存，不会写入安装包或中转服务。", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+            Text("所有服务商都可编辑 HTTPS 接口地址、选择协议、在线获取模型并手动填写模型名。配置与 Key 使用 Android Keystore 加密保存在本机。", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
         }
         item { BilibiliAccountConnectorCard(localFeedViewModel) }
         item {
@@ -780,11 +799,7 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                     Surface(
                         color = if (selected) Violet else Color.White,
                         shape = RoundedCornerShape(11.dp),
-                        modifier = Modifier.clickable {
-                            editingProvider = provider
-                            apiKey = store.providerSettings[provider]?.apiKey.orEmpty()
-                            model = store.providerSettings[provider]?.model ?: provider.defaultModel
-                        }
+                        modifier = Modifier.clickable { switchProvider(provider) }
                     ) { Text(provider.displayName, color = if (selected) Color.White else Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp)) }
                 }
             }
@@ -795,55 +810,117 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(34.dp).clip(CircleShape).background(SoftViolet), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = Violet, modifier = Modifier.size(18.dp)) }
                         Spacer(Modifier.width(10.dp))
-                        Column { Text(editingProvider.displayName, color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp); Text(if (editingProvider in configured) "已配置，可用于对话" else "尚未配置", color = Muted, fontSize = 12.sp) }
+                        Column(Modifier.weight(1f)) {
+                            Text(editingProvider.displayName, color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                            Text(if (editingProvider in configured) "已保存，可用于对话" else "尚未保存", color = Muted, fontSize = 12.sp)
+                        }
                     }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(15.dp))
                     OutlinedTextField(
                         value = apiKey, onValueChange = { apiKey = it }, label = { Text("API Key") }, placeholder = { Text(editingProvider.keyHint) },
                         modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation()
                     )
-                    Spacer(Modifier.height(11.dp))
-                    OutlinedTextField(
-                        value = model, onValueChange = { model = it }, label = { Text("模型名称") },
-                        modifier = Modifier.fillMaxWidth(), singleLine = true
-                    )
                     Spacer(Modifier.height(10.dp))
-                    Text("可按你的账号权限填写模型名称；默认值只是可修改的起点。", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
-                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("接口基础地址（可修改）") },
+                        placeholder = { Text(editingProvider.defaultBaseUrl) }, modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    Spacer(Modifier.height(9.dp))
+                    Text("调用协议", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        ProviderProtocol.entries.forEach { candidate ->
+                            val selected = protocol == candidate
+                            Surface(
+                                color = if (selected) SoftViolet else Color(0xFFF6F5FA),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.clickable { protocol = candidate }
+                            ) { Text(candidate.label, color = if (selected) Violet else Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = model, onValueChange = { model = it }, label = { Text("模型名称（可手动填写）") },
+                        placeholder = { Text(editingProvider.defaultModel.ifBlank { "例如 provider/model-name" }) }, modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    Spacer(Modifier.height(9.dp))
                     Button(
                         onClick = {
-                            store.setProviderSettings(editingProvider, ProviderSettings(apiKey = apiKey.trim(), model = model.trim()))
-                            localFeedViewModel.saveCloudAiConfig(editingProvider, apiKey.trim(), model.trim(), enable = true)
-                            apiKey = ""
+                            isLoadingModels = true
+                            modelStatus = "正在获取模型列表…"
+                            val requestSettings = ProviderSettings(apiKey.trim(), model.trim(), baseUrl.trim(), protocol)
+                            scope.launch {
+                                LlmClient().listModels(editingProvider, requestSettings)
+                                    .onSuccess { models ->
+                                        remoteModels = models.map { it.id }
+                                        modelStatus = if (models.isEmpty()) "服务商未返回可用模型；仍可手动填写模型名。" else "已获取 ${models.size} 个模型，点选即可填入。"
+                                    }
+                                    .onFailure { error ->
+                                        remoteModels = emptyList()
+                                        modelStatus = "获取失败：${error.message ?: "请检查 Key、地址和协议。"}"
+                                    }
+                                isLoadingModels = false
+                            }
+                        },
+                        enabled = !isLoadingModels,
+                        shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F4A63)), modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isLoadingModels) CircularProgressIndicator(Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
+                        else Text("获取模型列表")
+                    }
+                    Spacer(Modifier.height(7.dp))
+                    Text(modelStatus, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    if (remoteModels.isNotEmpty()) {
+                        Spacer(Modifier.height(7.dp))
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            remoteModels.forEach { item ->
+                                Surface(color = Color(0xFFF6F5FA), shape = RoundedCornerShape(10.dp), modifier = Modifier.clickable { model = item }) {
+                                    Text(item, color = Ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp))
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(15.dp))
+                    Button(
+                        onClick = {
+                            val saved = ProviderSettings(apiKey.trim(), model.trim(), baseUrl.trim(), protocol)
+                            store.setProviderSettings(editingProvider, saved)
+                            localFeedViewModel.saveCloudAiConfig(
+                                provider = editingProvider,
+                                apiKey = saved.apiKey,
+                                model = saved.effectiveModel(editingProvider),
+                                baseUrl = saved.effectiveBaseUrl(editingProvider),
+                                protocol = saved.effectiveProtocol(editingProvider),
+                                enable = true
+                            )
+                            modelStatus = "已保存 ${editingProvider.displayName} 配置。"
                         },
                         shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Ink), modifier = Modifier.fillMaxWidth()
-                    ) { Text("保存并启用 ${editingProvider.displayName} 云端增强") }
+                    ) { Text("保存并启用 ${editingProvider.displayName}") }
                     Spacer(Modifier.height(9.dp))
                     Text("当前云端增强：${localState.cloudAi.status}", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { localFeedViewModel.disableCloudAi() }) { Text("仅使用本机规则") }
-                        TextButton(onClick = { localFeedViewModel.clearCloudAiKey() }) { Text("清除加密 Key", color = Muted) }
+                        TextButton(onClick = { localFeedViewModel.clearCloudAiKey() }) { Text("清除云端增强 Key", color = Muted) }
                     }
                 }
             }
         }
-        item { SectionTitle("支持的接口") }
+        item { SectionTitle("协议说明") }
         item {
             Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                 Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ModelCapabilityRow("OpenAI", "Chat Completions")
+                    ModelCapabilityRow("OpenAI 兼容", "OpenAI、DeepSeek、智谱、Kimi、OpenRouter 与多数自定义网关")
                     HorizontalDivider(color = Color(0xFFF0EFF5))
-                    ModelCapabilityRow("Claude", "Messages API")
+                    ModelCapabilityRow("Anthropic", "Claude Messages API")
                     HorizontalDivider(color = Color(0xFFF0EFF5))
-                    ModelCapabilityRow("Gemini", "Generate Content")
-                    HorizontalDivider(color = Color(0xFFF0EFF5))
-                    ModelCapabilityRow("DeepSeek", "Chat Completions")
+                    ModelCapabilityRow("Gemini", "Google GenerateContent API")
                 }
             }
         }
         item {
             Surface(color = Color(0xFFE8F7FC), shape = RoundedCornerShape(16.dp)) {
-                Text("隐私说明：云端 AI 只在你点击“AI解析”或“更新长期画像候选”时调用；内容分析发送标题、摘要、来源和当前主题，画像生成只发送聚合兴趣和事件数。不会发送 B 站 Cookie、账号令牌或原始观看记录。调用失败或未配置 Key 时，Aulune保持本机规则模式。", color = Color(0xFF24536B), fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(14.dp))
+                Text("隐私说明：云端 AI 只在你主动发送对话、点击“AI解析”或更新长期画像候选时调用。内容分析发送标题、摘要、来源和当前主题；画像生成只发送聚合兴趣和事件数。不会发送 B 站 Cookie、账号令牌或原始观看记录。", color = Color(0xFF24536B), fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(14.dp))
             }
         }
     }

@@ -1,10 +1,19 @@
 package app.aulune.mobile
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 enum class SourceChannel(val label: String, val accent: Long) {
     Insight("深读", 0xFF7C5CFC),
@@ -14,21 +23,103 @@ enum class SourceChannel(val label: String, val accent: Long) {
     Signal("灵感", 0xFFEC4899)
 }
 
+enum class ProviderProtocol(val label: String) {
+    OpenAiCompatible("OpenAI 兼容"),
+    AnthropicMessages("Anthropic Messages"),
+    GeminiGenerateContent("Gemini GenerateContent")
+}
+
 enum class AiProvider(
     val displayName: String,
     val defaultModel: String,
+    val defaultBaseUrl: String,
+    val protocol: ProviderProtocol,
     val keyHint: String
 ) {
-    OpenAI("OpenAI", "gpt-4o-mini", "sk-…"),
-    Claude("Claude", "claude-3-5-haiku-latest", "sk-ant-…"),
-    Gemini("Gemini", "gemini-2.5-flash", "AIza…"),
-    DeepSeek("DeepSeek", "deepseek-v4-flash", "sk-…")
+    OpenAI("OpenAI", "gpt-4o-mini", "https://api.openai.com/v1", ProviderProtocol.OpenAiCompatible, "sk-…"),
+    Claude("Claude", "claude-3-5-haiku-latest", "https://api.anthropic.com/v1", ProviderProtocol.AnthropicMessages, "sk-ant-…"),
+    Gemini("Gemini", "gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta", ProviderProtocol.GeminiGenerateContent, "AIza…"),
+    DeepSeek("DeepSeek", "deepseek-v4-flash", "https://api.deepseek.com", ProviderProtocol.OpenAiCompatible, "sk-…"),
+    Zhipu("智谱 GLM", "glm-5.3", "https://api.z.ai/api/paas/v4", ProviderProtocol.OpenAiCompatible, "…"),
+    Kimi("Kimi", "kimi-k2.6", "https://api.moonshot.ai/v1", ProviderProtocol.OpenAiCompatible, "sk-…"),
+    OpenRouter("OpenRouter", "openai/gpt-4o-mini", "https://openrouter.ai/api/v1", ProviderProtocol.OpenAiCompatible, "sk-or-…"),
+    Custom("自定义", "", "https://", ProviderProtocol.OpenAiCompatible, "按服务商要求填写")
 }
 
 data class ProviderSettings(
     val apiKey: String = "",
-    val model: String = ""
+    val model: String = "",
+    val baseUrl: String = "",
+    val protocol: ProviderProtocol? = null
+) {
+    fun effectiveModel(provider: AiProvider): String = model.trim().ifBlank { provider.defaultModel }
+    fun effectiveBaseUrl(provider: AiProvider): String = baseUrl.trim().ifBlank { provider.defaultBaseUrl }
+    fun effectiveProtocol(provider: AiProvider): ProviderProtocol = protocol ?: provider.protocol
+}
+
+data class ProviderProfilesSnapshot(
+    val selectedProvider: AiProvider = AiProvider.OpenAI,
+    val profiles: Map<AiProvider, ProviderSettings> = emptyMap()
 )
+
+internal object ProviderProfilesCodec {
+    fun decode(encodedProfiles: String, selected: String?): ProviderProfilesSnapshot {
+        val root = Json.parseToJsonElement(encodedProfiles).jsonObject
+        val profiles = buildMap {
+            AiProvider.entries.forEach { provider ->
+                val item = root[provider.name]?.jsonObject ?: return@forEach
+                val protocol = item["protocol"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?.let { runCatching { ProviderProtocol.valueOf(it) }.getOrNull() }
+                put(provider, ProviderSettings(
+                    apiKey = item["apiKey"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    model = item["model"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    baseUrl = item["baseUrl"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    protocol = protocol
+                ))
+            }
+        }
+        return ProviderProfilesSnapshot(
+            selectedProvider = selected?.let { runCatching { AiProvider.valueOf(it) }.getOrDefault(AiProvider.OpenAI) } ?: AiProvider.OpenAI,
+            profiles = profiles
+        )
+    }
+
+    fun encode(snapshot: ProviderProfilesSnapshot): String = buildJsonObject {
+        snapshot.profiles.forEach { (provider, value) ->
+            put(provider.name, buildJsonObject {
+                put("apiKey", value.apiKey.trim())
+                put("model", value.model.trim())
+                put("baseUrl", value.baseUrl.trim())
+                put("protocol", value.protocol?.name.orEmpty())
+            })
+        }
+    }.toString()
+}
+
+/** 服务商 Key、模型与自定义端点只保存在当前设备的 Android Keystore 加密偏好中。 */
+class SecureProviderProfiles(context: Context) {
+    private val preferences = EncryptedSharedPreferences.create(
+        context,
+        "aulune-provider-profiles",
+        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    fun load(): ProviderProfilesSnapshot = runCatching {
+        ProviderProfilesCodec.decode(
+            encodedProfiles = preferences.getString("profiles", "{}") ?: "{}",
+            selected = preferences.getString("selected", AiProvider.OpenAI.name)
+        )
+    }.getOrDefault(ProviderProfilesSnapshot())
+
+    fun save(snapshot: ProviderProfilesSnapshot) {
+        preferences.edit()
+            .putString("profiles", ProviderProfilesCodec.encode(snapshot))
+            .putString("selected", snapshot.selectedProvider.name)
+            .apply()
+    }
+}
 
 /** A UI projection of a persisted local content item. */
 data class CuratedItem(
@@ -58,34 +149,41 @@ data class ConversationMessage(
     val time: String
 )
 
-/**
- * 对话与模型配置仍是会话级功能。推荐、收藏、历史和兴趣画像已移交给 LocalFeedViewModel
- * 与 Room 数据库，不再保存在 Compose 内存列表中。
- */
-class AuluneStore {
-    val messages = mutableStateListOf<ConversationMessage>().apply { addAll(seedMessages()) }
+class AuluneStore(context: Context) {
+    private val secureProfiles = SecureProviderProfiles(context)
+    val messages = mutableStateListOf<ConversationMessage>()
     val providerSettings = mutableStateMapOf<AiProvider, ProviderSettings>()
 
     var selectedProvider by mutableStateOf(AiProvider.OpenAI)
+        private set
     var isGenerating by mutableStateOf(false)
     var aiStatus by mutableStateOf("本地对话模式")
         private set
 
-    fun addUserMessage(text: String) {
-        val clean = text.trim()
-        if (clean.isNotEmpty()) {
-            messages += ConversationMessage(messages.size + 1L, true, clean, "刚刚")
-        }
+    init {
+        val snapshot = secureProfiles.load()
+        providerSettings.putAll(snapshot.profiles)
+        selectedProvider = snapshot.selectedProvider
+        val active = providerSettings[selectedProvider]
+        aiStatus = if (active?.apiKey.isNullOrBlank()) "本地对话模式" else "${selectedProvider.displayName} 已就绪"
     }
 
-    fun addAssistantMessage(text: String) {
-        messages += ConversationMessage(messages.size + 1L, false, text.trim(), "刚刚")
+    fun settingsFor(provider: AiProvider): ProviderSettings = providerSettings[provider] ?: ProviderSettings(
+        model = provider.defaultModel,
+        baseUrl = provider.defaultBaseUrl,
+        protocol = provider.protocol
+    )
+
+    fun selectProvider(provider: AiProvider) {
+        selectedProvider = provider
+        persist()
     }
 
     fun setProviderSettings(provider: AiProvider, settings: ProviderSettings) {
         providerSettings[provider] = settings
         selectedProvider = provider
         aiStatus = if (settings.apiKey.isBlank()) "本地对话模式" else "${provider.displayName} 已就绪"
+        persist()
     }
 
     fun updateGenerating(value: Boolean) {
@@ -93,13 +191,7 @@ class AuluneStore {
         if (value) aiStatus = "${selectedProvider.displayName} 正在思考"
     }
 
-    fun updateAiStatus(value: String) {
-        aiStatus = value
-    }
-}
+    fun updateAiStatus(value: String) { aiStatus = value }
 
-private fun seedMessages() = listOf(
-    ConversationMessage(1L, false, "我是Aulune。你可以让我梳理想法、解释问题，或一起制定下一步。", "09:20"),
-    ConversationMessage(2L, true, "我希望把近期的工作节奏调得更稳一点。", "09:22"),
-    ConversationMessage(3L, false, "可以。我们先不急着新增任务，先识别哪一部分最消耗你的注意力，再为它设计一个更轻的默认动作。", "09:22")
-)
+    private fun persist() = secureProfiles.save(ProviderProfilesSnapshot(selectedProvider, providerSettings.toMap()))
+}

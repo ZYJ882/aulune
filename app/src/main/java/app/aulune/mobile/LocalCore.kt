@@ -849,12 +849,21 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun rotateFeed() { rotation.value += 1 }
 
-    fun saveCloudAiConfig(provider: AiProvider, apiKey: String, model: String, enable: Boolean) {
+    fun saveCloudAiConfig(
+        provider: AiProvider,
+        apiKey: String,
+        model: String,
+        baseUrl: String = "",
+        protocol: ProviderProtocol? = null,
+        enable: Boolean
+    ) {
         val previous = cloudConfig.value
         val updated = CloudAiConfig(
             provider = provider,
             apiKey = apiKey.ifBlank { previous.apiKey },
             model = model.ifBlank { provider.defaultModel },
+            baseUrl = baseUrl.ifBlank { provider.defaultBaseUrl },
+            protocol = protocol ?: provider.protocol,
             enabled = enable
         )
         secureCloudSettings.save(updated)
