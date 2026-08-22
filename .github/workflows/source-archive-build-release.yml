@@ -57,6 +57,20 @@ jobs:
             echo "AULUNE_SIGNING_KEY_PASSWORD=$SIGNING_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
+      - name: Set automatic build version
+        id: version
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
+          BASE_VERSION: ${{ steps.source.outputs.version }}
+        shell: bash
+        run: |
+          chmod +x scripts/set-build-version.sh
+          version_code=$((100000000 + GITHUB_RUN_NUMBER))
+          version_name="${BASE_VERSION}+build.${GITHUB_RUN_NUMBER}"
+          scripts/set-build-version.sh "$PROJECT_DIR" "$version_code" "$version_name"
+          echo "version=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK
         working-directory: ${{ steps.source.outputs.project_dir }}
         shell: bash
@@ -65,23 +79,26 @@ jobs:
       - name: Prepare release files
         id: release
         env:
-          VERSION: ${{ steps.source.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          BASE_VERSION: ${{ steps.source.outputs.version }}
           SOURCE_KIND: ${{ steps.source.outputs.source_kind }}
         shell: bash
         run: |
           mkdir -p dist
           apk="$(find "${{ steps.source.outputs.project_dir }}/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
           test -n "$apk"
-          cp "$apk" "dist/aulune-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
-          tag="source-v${VERSION}-build-${GITHUB_RUN_NUMBER}"
+          cp "$apk" "dist/aulune-v${BASE_VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
+          tag="source-v${BASE_VERSION}-build-${GITHUB_RUN_NUMBER}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "apk=dist/aulune-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk" >> "$GITHUB_OUTPUT"
+          echo "apk=dist/aulune-v${BASE_VERSION}-build-${GITHUB_RUN_NUMBER}.apk" >> "$GITHUB_OUTPUT"
           {
             echo "Aulune Android source archive build"
             echo "version=${VERSION}"
+            echo "versionCode=${VERSION_CODE}"
             echo "source=${SOURCE_KIND}"
             echo "run=${GITHUB_RUN_NUMBER}"
-            sha256sum "dist/aulune-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
+            sha256sum "dist/aulune-v${BASE_VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
           } > dist/build-info.txt
 
       - name: Upload workflow artifacts
@@ -97,7 +114,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           APK: ${{ steps.release.outputs.apk }}
-          VERSION: ${{ steps.source.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
           SOURCE_KIND: ${{ steps.source.outputs.source_kind }}
         shell: bash
         run: |
@@ -105,4 +123,4 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Aulune v${VERSION} uploaded-source build" \
-            --notes "Automated Android debug build from ${SOURCE_KIND}."
+            --notes "Automated Android debug build from ${SOURCE_KIND}. Android versionCode: ${VERSION_CODE}."

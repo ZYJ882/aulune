@@ -38,7 +38,9 @@ jobs:
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.source.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      tag: ${{ steps.version.outputs.tag }}
       source_kind: ${{ steps.source.outputs.source_kind }}
       artifact_name: ${{ steps.artifact.outputs.name }}
     steps:
@@ -78,6 +80,21 @@ jobs:
             echo "AULUNE_SIGNING_KEY_PASSWORD=$SIGNING_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
+      - name: Set automatic build version
+        id: version
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
+          BASE_VERSION: ${{ steps.source.outputs.version }}
+        shell: bash
+        run: |
+          chmod +x scripts/set-build-version.sh
+          version_code=$((100000000 + GITHUB_RUN_NUMBER))
+          version_name="${BASE_VERSION}+build.${GITHUB_RUN_NUMBER}"
+          scripts/set-build-version.sh "$PROJECT_DIR" "$version_code" "$version_name"
+          echo "version=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "tag=v${BASE_VERSION}-build-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK
         working-directory: ${{ steps.source.outputs.project_dir }}
         shell: bash
@@ -87,7 +104,7 @@ jobs:
         id: artifact
         shell: bash
         run: |
-          name="Aulune-APK-${{ steps.source.outputs.version }}-${{ github.event_name }}-${{ github.run_number }}"
+          name="Aulune-APK-${{ steps.version.outputs.version }}-${{ github.event_name }}-${{ github.run_number }}"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
@@ -111,36 +128,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check release tag availability
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        shell: bash
-        run: |
-          tag="v${VERSION}"
-          if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            echo "Release $tag already exists; build artifact remains available from this workflow run."
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Download built APK
-        if: steps.release.outputs.publish == 'true'
         uses: actions/download-artifact@v5
         with:
           name: ${{ needs.build.outputs.artifact_name }}
           path: dist
 
       - name: Create GitHub Release
-        if: steps.release.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ needs.build.outputs.tag }}
           VERSION: ${{ needs.build.outputs.version }}
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
           SOURCE_KIND: ${{ needs.build.outputs.source_kind }}
         shell: bash
         run: |
@@ -151,4 +150,4 @@ jobs:
             --target "${GITHUB_SHA}" \
             --title "Aulune v${VERSION}" \
             --generate-notes \
-            --notes "Automated Android debug APK built from ${SOURCE_KIND}."
+            --notes "Automated Android debug APK built from ${SOURCE_KIND}. Android versionCode: ${VERSION_CODE}."

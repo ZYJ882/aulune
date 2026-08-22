@@ -30,3 +30,7 @@
 | `AULUNE_SIGNING_KEY_PASSWORD` | `aulune-release` 别名对应的密钥密码 |
 
 工作流会在 Runner 临时目录还原密钥，Gradle 使用 `aulune-release` 签名配置生成 APK，构建结束后 Runner 销毁。只有使用同一签名证书构建的 APK 才能覆盖安装在设备上的旧 APK；如果更换签名证书，必须先卸载旧应用，或继续保留原密钥用于后续更新。
+
+## 自动版本与升级
+
+每次主分支或源码压缩包构建都会自动计算唯一版本：`versionCode = 100000000 + GitHub Actions run number`，并将 `versionName` 写为基础版本加构建号，例如 `1.3.2+build.123`。Release 标签同时包含基础版本和运行号，因此不会因重复标签跳过发布。固定签名保持不变，且新 APK 的 `versionCode` 高于旧版本时可以直接覆盖安装。第一次从旧临时调试签名切换到固定签名版本仍需卸载一次。
