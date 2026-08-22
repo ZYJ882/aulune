@@ -1,0 +1,89 @@
+name: Build and publish uploaded source archive
+
+on:
+  push:
+    branches: [source-upload]
+    paths:
+      - "incoming-source/**"
+      - ".github/workflows/source-archive-build-release.yml"
+      - "scripts/resolve-android-source.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-archive-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Extract source, build APK and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out uploaded source branch
+        uses: actions/checkout@v6
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Resolve uploaded Android source
+        id: source
+        shell: bash
+        run: |
+          chmod +x scripts/resolve-android-source.sh
+          scripts/resolve-android-source.sh "$GITHUB_WORKSPACE"
+
+      - name: Build debug APK
+        working-directory: ${{ steps.source.outputs.project_dir }}
+        shell: bash
+        run: ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest
+
+      - name: Prepare release files
+        id: release
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_KIND: ${{ steps.source.outputs.source_kind }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          apk="$(find "${{ steps.source.outputs.project_dir }}/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          cp "$apk" "dist/aulune-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
+          tag="source-v${VERSION}-build-${GITHUB_RUN_NUMBER}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "apk=dist/aulune-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk" >> "$GITHUB_OUTPUT"
+          {
+            echo "Aulune Android source archive build"
+            echo "version=${VERSION}"
+            echo "source=${SOURCE_KIND}"
+            echo "run=${GITHUB_RUN_NUMBER}"
+            sha256sum "dist/aulune-v${VERSION}-build-${GITHUB_RUN_NUMBER}.apk"
+          } > dist/build-info.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aulune-uploaded-source-build-${{ github.run_number }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          APK: ${{ steps.release.outputs.apk }}
+          VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_KIND: ${{ steps.source.outputs.source_kind }}
+        shell: bash
+        run: |
+          gh release create "$TAG" "$APK" dist/build-info.txt \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Aulune v${VERSION} uploaded-source build" \
+            --notes "Automated Android debug build from ${SOURCE_KIND}."

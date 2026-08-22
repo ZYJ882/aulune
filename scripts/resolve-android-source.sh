@@ -16,8 +16,22 @@ write_output() {
   fi
 }
 
+validate_listing() {
+  local listing_file="$1"
+  local file_count
+  file_count="$(wc -l < "$listing_file" | tr -d ' ')"
+  if (( file_count == 0 || file_count > 5000 )); then
+    echo "Source archive must contain 1 to 5000 files." >&2
+    exit 1
+  fi
+  if grep -Eq '(^/|(^|/)\.\.(/|$)|\\)' "$listing_file"; then
+    echo "Source archive contains an unsafe path." >&2
+    exit 1
+  fi
+}
+
 shopt -s nullglob
-archives=("$incoming_dir"/*.zip)
+archives=("$incoming_dir"/*.zip "$incoming_dir"/*.tar.gz "$incoming_dir"/*.tgz)
 shopt -u nullglob
 
 if (( ${#archives[@]} > 1 )); then
@@ -29,23 +43,26 @@ if (( ${#archives[@]} == 1 )); then
   archive="${archives[0]}"
   listing_file="$(mktemp)"
   trap 'rm -f "$listing_file"' EXIT
-
-  unzip -Z1 "$archive" > "$listing_file"
-  file_count="$(wc -l < "$listing_file" | tr -d ' ')"
-  if (( file_count == 0 || file_count > 5000 )); then
-    echo "Source archive must contain 1 to 5000 files." >&2
-    exit 1
-  fi
-
-  if grep -Eq '(^/|(^|/)\.\.(/|$)|\\)' "$listing_file"; then
-    echo "Source archive contains an unsafe path." >&2
-    exit 1
-  fi
-
   extract_dir="$workspace/.automation-source"
   rm -rf "$extract_dir"
   mkdir -p "$extract_dir"
-  unzip -q "$archive" -d "$extract_dir"
+
+  case "$archive" in
+    *.zip)
+      unzip -Z1 "$archive" > "$listing_file"
+      validate_listing "$listing_file"
+      unzip -q "$archive" -d "$extract_dir"
+      ;;
+    *.tar.gz|*.tgz)
+      tar -tzf "$archive" > "$listing_file"
+      validate_listing "$listing_file"
+      tar -xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions
+      ;;
+    *)
+      echo "Unsupported archive type." >&2
+      exit 1
+      ;;
+  esac
 
   if find "$extract_dir" -type l -print -quit | grep -q .; then
     echo "Source archive may not contain symbolic links." >&2
