@@ -252,6 +252,24 @@ interface LocalCoreDao {
 
     @Query("DELETE FROM local_feedback WHERE contentKey LIKE :prefix")
     suspend fun deleteFeedbackByPrefix(prefix: String)
+
+    @Query("SELECT * FROM local_discovery_task ORDER BY createdAt DESC LIMIT :limit")
+    fun observeDiscoveryTasks(limit: Int = 8): Flow<List<DiscoveryTaskEntity>>
+
+    @Query("SELECT * FROM source_availability ORDER BY checkedAt DESC")
+    fun observeSourceAvailability(): Flow<List<SourceAvailabilityEntity>>
+
+    @Query("SELECT * FROM local_discovery_task WHERE taskId = :taskId LIMIT 1")
+    suspend fun discoveryTask(taskId: String): DiscoveryTaskEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDiscoveryTask(task: DiscoveryTaskEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSourceAvailability(items: List<SourceAvailabilityEntity>)
+
+    @Query("UPDATE local_discovery_task SET status = 'Cancelled', finishedAt = :finishedAt, detail = :detail WHERE status IN ('Queued', 'Running')")
+    suspend fun cancelActiveDiscoveryTasks(finishedAt: Long, detail: String)
 }
 
 @Database(
@@ -262,9 +280,11 @@ interface LocalCoreDao {
         LocalFeedbackEntity::class,
         LocalProfileEntity::class,
         LocalPreferenceEntity::class,
-        LocalChatMessageEntity::class
+        LocalChatMessageEntity::class,
+        DiscoveryTaskEntity::class,
+        SourceAvailabilityEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AuluneLocalDatabase : RoomDatabase() {
@@ -308,11 +328,20 @@ abstract class AuluneLocalDatabase : RoomDatabase() {
             }
         }
 
+        private val Migration5To6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_discovery_task (taskId TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, startedAt INTEGER NOT NULL, finishedAt INTEGER NOT NULL, discoveredCount INTEGER NOT NULL, checkedSources INTEGER NOT NULL, availableSources INTEGER NOT NULL, detail TEXT NOT NULL, PRIMARY KEY(taskId))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_discovery_task_createdAt ON local_discovery_task(createdAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_discovery_task_status ON local_discovery_task(status)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS source_availability (platform TEXT NOT NULL, state TEXT NOT NULL, detail TEXT NOT NULL, checkedAt INTEGER NOT NULL, discoveredCount INTEGER NOT NULL, attempts INTEGER NOT NULL, PRIMARY KEY(platform))")
+            }
+        }
+
         fun create(context: Context): AuluneLocalDatabase = Room.databaseBuilder(
             context.applicationContext,
             AuluneLocalDatabase::class.java,
             "aulune-local.db"
-        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5).build()
+        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6).build()
     }
 }
 
@@ -364,9 +393,10 @@ data class LocalFeedUiState(
     val isPlatformSyncing: Boolean = false,
     val platformSyncStatus: Map<ContentPlatform, String> = emptyMap(),
     val platformLoginStatus: Map<ContentPlatform, String> = emptyMap(),
+    val backgroundDiscovery: BackgroundDiscoveryUiState = BackgroundDiscoveryUiState(),
 )
 
-private data class CloudProfileInput(
+internal data class CloudProfileInput(
     val interests: List<InterestEntity>,
     val intent: SessionIntent,
     val eventCount: Int
@@ -376,10 +406,11 @@ private data class PlatformIntegrationState(
     val cloud: CloudAiUiState,
     val syncing: Boolean,
     val syncStatus: Map<ContentPlatform, String>,
-    val loginStatus: Map<ContentPlatform, String>
+    val loginStatus: Map<ContentPlatform, String>,
+    val backgroundDiscovery: BackgroundDiscoveryUiState
 )
 
-private data class RankingSnapshot(
+internal data class RankingSnapshot(
     val content: List<LocalContentEntity>,
     val savedCount: Int,
     val interests: List<InterestEntity>,
@@ -388,7 +419,48 @@ private data class RankingSnapshot(
     val profiles: List<LocalProfileEntity> = emptyList()
 )
 
-private class LocalCoreRepository(private val dao: LocalCoreDao) {
+internal class LocalCoreRepository(private val dao: LocalCoreDao) {
+    fun observeDiscoveryTasks(): Flow<List<DiscoveryTaskEntity>> = dao.observeDiscoveryTasks()
+
+    fun observeSourceAvailability(): Flow<List<SourceAvailabilityEntity>> = dao.observeSourceAvailability()
+
+    suspend fun queueDiscoveryTask(kind: DiscoveryTaskKind): String {
+        val taskId = UUID.randomUUID().toString()
+        dao.upsertDiscoveryTask(
+            DiscoveryTaskEntity(
+                taskId = taskId,
+                kind = kind.name,
+                status = DiscoveryTaskStatus.Queued.name,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        return taskId
+    }
+
+    suspend fun runManualDiscoveryTask(taskId: String) {
+        val existing = dao.discoveryTask(taskId) ?: return
+        val startedAt = System.currentTimeMillis()
+        dao.upsertDiscoveryTask(existing.copy(status = DiscoveryTaskStatus.Running.name, startedAt = startedAt, finishedAt = 0L, detail = "正在探测公开来源…"))
+        try {
+            val result = discoverPublicSources()
+            val status = DiscoveryTaskClassifier.status(result)
+            dao.upsertDiscoveryTask(
+                existing.copy(
+                    status = status.name,
+                    startedAt = startedAt,
+                    finishedAt = System.currentTimeMillis(),
+                    discoveredCount = result.discoveredCount,
+                    checkedSources = result.outcomes.size,
+                    availableSources = result.availableSources,
+                    detail = DiscoveryTaskClassifier.detail(result)
+                )
+            )
+        } catch (error: Throwable) {
+            val failure = PlatformFailureClassifier.classify(error)
+            dao.upsertDiscoveryTask(existing.copy(status = DiscoveryTaskStatus.Failed.name, startedAt = startedAt, finishedAt = System.currentTimeMillis(), detail = failure.display()))
+        }
+    }
+
     fun observeRankingSnapshot(): Flow<RankingSnapshot> {
         val core = combine(
             dao.observeVisibleContent(),
@@ -507,6 +579,22 @@ private class LocalCoreRepository(private val dao: LocalCoreDao) {
         val items = connector.fetchPublic(pageSize = 20)
         val normalized = items.map(LocalAdaptiveCore::normalize)
         return importContent(normalized)
+    }
+
+    /** 后台或手动发现：按现有错误分类和最多 3 次退避规则探测每个公开来源。 */
+    suspend fun discoverPublicSources(): DiscoveryRunResult {
+        val outcomes = ContentPlatform.entries.map { platform ->
+            val attempt = PlatformRetryPolicy.run { importPlatformPublic(platform) }
+            SourceProbeOutcome(
+                platform = platform,
+                discoveredCount = attempt.value ?: 0,
+                attempts = attempt.attempts,
+                failure = attempt.failure
+            )
+        }
+        dao.upsertSourceAvailability(outcomes.map { it.toEntity(System.currentTimeMillis()) })
+        rebuildProfiles(force = true)
+        return DiscoveryRunResult(outcomes)
     }
 
     /** 导入所有平台的公开内容 */
@@ -781,8 +869,23 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     private val _isPlatformSyncing = MutableStateFlow(false)
     val isPlatformSyncing: StateFlow<Boolean> = _isPlatformSyncing
     private val _platformLoginStatus = MutableStateFlow<Map<ContentPlatform, String>>(emptyMap())
-    private val integrationState = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus, _platformLoginStatus) { cloud, syncing, syncStatus, loginStatus ->
-        PlatformIntegrationState(cloud, syncing, syncStatus, loginStatus)
+    private val manualDiscoveryRunning = MutableStateFlow(false)
+    private val backgroundDiscoveryNotice = MutableStateFlow("仅在你点击“立即探测公开来源”后执行；不会在后台自动联网。")
+    private val backgroundDiscovery = combine(
+        repository.observeDiscoveryTasks(),
+        repository.observeSourceAvailability(),
+        manualDiscoveryRunning,
+        backgroundDiscoveryNotice
+    ) { tasks, sources, running, notice ->
+        BackgroundDiscoveryUiState(
+            isRunning = running || tasks.any { it.status in setOf(DiscoveryTaskStatus.Queued.name, DiscoveryTaskStatus.Running.name) },
+            notice = notice,
+            sources = sources.map { it.toUi() },
+            recentTasks = tasks.map { it.toUi() }
+        )
+    }
+    private val integrationState = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus, _platformLoginStatus, backgroundDiscovery) { cloud, syncing, syncStatus, loginStatus, discovery ->
+        PlatformIntegrationState(cloud, syncing, syncStatus, loginStatus, discovery)
     }
 
     val uiState: StateFlow<LocalFeedUiState> = combine(
@@ -796,6 +899,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         val platformSyncing = integration.syncing
         val platformStatus = integration.syncStatus
         val platformLoginStatus = integration.loginStatus
+        val backgroundDiscovery = integration.backgroundDiscovery
         val ordered = snapshot.content
             .map(LocalAdaptiveCore::normalize)
             .filterNot { LocalAdaptiveCore.shouldExclude(it, snapshot.feedback) }
@@ -826,6 +930,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             isPlatformSyncing = platformSyncing,
             platformSyncStatus = platformStatus,
             platformLoginStatus = platformLoginStatus,
+            backgroundDiscovery = backgroundDiscovery,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocalFeedUiState())
 
@@ -848,6 +953,18 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun rotateFeed() { rotation.value += 1 }
+
+    fun runBackgroundDiscoveryNow() {
+        if (manualDiscoveryRunning.value) return
+        viewModelScope.launch {
+            manualDiscoveryRunning.value = true
+            val taskId = repository.queueDiscoveryTask(DiscoveryTaskKind.Manual)
+            backgroundDiscoveryNotice.value = "正在探测公开来源；本轮结束后会在本机保留任务和来源状态。"
+            repository.runManualDiscoveryTask(taskId)
+            manualDiscoveryRunning.value = false
+            backgroundDiscoveryNotice.value = "仅在你点击“立即探测公开来源”后执行；不会在后台自动联网。"
+        }
+    }
 
     fun saveCloudAiConfig(
         provider: AiProvider,

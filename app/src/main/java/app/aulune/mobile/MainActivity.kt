@@ -273,6 +273,10 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                         }
                     }
                 }
+                BackgroundDiscoveryCard(
+                    state = localState.backgroundDiscovery,
+                    onRunNow = viewModel::runBackgroundDiscoveryNow
+                )
                 Text("云端 AI：${localState.cloudAi.status}", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                 Button(
                     onClick = { viewModel.rotateFeed() },
@@ -310,6 +314,48 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
             )
         }
         item { Text("B 站公开内容、收藏、推荐理由与行为事件仅保存在这台手机。Aulune不读取、导出或同步官方登录 Cookie。", color = Muted, fontSize = 12.sp, lineHeight = 18.sp) }
+    }
+}
+
+@Composable
+internal fun BackgroundDiscoveryCard(
+    state: BackgroundDiscoveryUiState,
+    onRunNow: () -> Unit
+) {
+    Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text("手动来源探测", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text("仅在你点击后联网 · 仅探测公开来源", color = Color(0xFF277A45), fontSize = 11.sp)
+                }
+            }
+            Text(state.notice, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            Button(
+                onClick = onRunNow,
+                enabled = !state.isRunning,
+                shape = RoundedCornerShape(11.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F4A63)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (state.isRunning) CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                else Text("立即探测公开来源", fontSize = 13.sp)
+            }
+            if (state.sources.isNotEmpty()) {
+                Text("最近来源可用性", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                state.sources.forEach { source ->
+                    val tone = when (source.state) {
+                        SourceAvailabilityState.Available -> Color(0xFF277A45)
+                        SourceAvailabilityState.Degraded -> Color(0xFFD86A20)
+                        SourceAvailabilityState.Unavailable -> Color(0xFFC62828)
+                    }
+                    Text("${source.platform.shortLabel} · ${source.state.label} · ${source.detail}", color = tone, fontSize = 11.sp, lineHeight = 16.sp)
+                }
+            }
+            state.recentTasks.firstOrNull()?.let { task ->
+                Text("最近任务：${task.kind.label} · ${task.status.label} · ${task.detail}", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+        }
     }
 }
 
