@@ -277,6 +277,10 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                     state = localState.backgroundDiscovery,
                     onRunNow = viewModel::runBackgroundDiscoveryNow
                 )
+                CloudManualOrganizeCard(
+                    state = localState.cloudAi,
+                    onOrganize = viewModel::organizeRecentContentWithCloudAi
+                )
                 Text("云端 AI：${localState.cloudAi.status}", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                 Button(
                     onClick = { viewModel.rotateFeed() },
@@ -354,6 +358,39 @@ internal fun BackgroundDiscoveryCard(
             }
             state.recentTasks.firstOrNull()?.let { task ->
                 Text("最近任务：${task.kind.label} · ${task.status.label} · ${task.detail}", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun CloudManualOrganizeCard(
+    state: CloudAiUiState,
+    onOrganize: () -> Unit
+) {
+    Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF6F3FF))) {
+        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("云端智能整理", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "仅在你点击后，才会依次向已配置的服务商发送最多 5 条内容的标题、摘要、来源和当前规则主题。不会使用本地模型、Embedding 或后台联网。",
+                color = Muted,
+                fontSize = 11.sp,
+                lineHeight = 16.sp
+            )
+            Text(
+                if (state.enabled && state.hasKey) "当前使用 ${state.provider.displayName} · ${state.model}" else "请先在“模型”页保存并启用云端 API Key。",
+                color = if (state.enabled && state.hasKey) Color(0xFF277A45) else Muted,
+                fontSize = 11.sp
+            )
+            Button(
+                onClick = onOrganize,
+                enabled = state.enabled && state.hasKey && !state.isWorking,
+                shape = RoundedCornerShape(11.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Violet),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (state.isWorking) CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                else Text("智能整理最多 5 条内容", fontSize = 13.sp)
             }
         }
     }

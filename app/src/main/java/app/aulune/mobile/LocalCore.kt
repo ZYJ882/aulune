@@ -523,19 +523,22 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
 
     suspend fun cloudContentInput(contentKey: String): LocalContentEntity? = dao.contentByKey(contentKey)
 
-    suspend fun applyCloudContentAnalysis(item: CuratedItem, analysis: CloudContentAnalysis) {
+    suspend fun cloudOrganizeCandidates(limit: Int = CloudManualOrganizePolicy.DefaultBatchLimit): List<LocalContentEntity> =
+        CloudManualOrganizePolicy.selectCandidates(dao.allContent(), limit)
+
+    suspend fun applyCloudContentAnalysis(item: LocalContentEntity, analysis: CloudContentAnalysis) {
         val now = System.currentTimeMillis()
         val theme = analysis.theme.ifBlank { item.theme }
         val group = analysis.topicGroup.ifBlank { item.topicGroup }
         dao.applyCloudAnalysis(
-            contentKey = item.id,
+            contentKey = item.contentKey,
             theme = theme,
             topicGroup = group,
             seriesKey = analysis.seriesKey.ifBlank { item.seriesKey },
             aiInsight = analysis.insight,
             now = now
         )
-        dao.reclassifyContentEvents(item.id, theme, group)
+        dao.reclassifyContentEvents(item.contentKey, theme, group)
         rebuildInterestsFromRemainingEvents()
         rebuildProfiles(force = true)
     }
@@ -1016,12 +1019,47 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             cloudUi.value = cloudUiState(config, working = true, status = "${config.provider.displayName} 正在分析内容元数据…")
             cloudService.analyzeContent(config, content)
                 .onSuccess { analysis ->
-                    repository.applyCloudContentAnalysis(item, analysis)
+                    repository.applyCloudContentAnalysis(content, analysis)
                     cloudUi.value = cloudUiState(config, status = "云端内容分析已保存到本机；后续排序仍由本机执行。")
                 }
                 .onFailure { error ->
                     cloudUi.value = cloudUiState(config, status = "云端分析失败，已保留本机规则：${error.message ?: "请检查 Key、模型和网络。"}")
                 }
+        }
+    }
+
+    /** 仅在用户点击后按顺序整理最近五条尚未云端分析的可见内容；不会后台运行。 */
+    fun organizeRecentContentWithCloudAi() {
+        val config = cloudConfig.value
+        if (!config.isUsable || cloudUi.value.isWorking) {
+            cloudUi.value = cloudUiState(config, status = "请先在“模型”页启用云端 AI；未启用时信息流始终使用本机规则。")
+            return
+        }
+        viewModelScope.launch {
+            val candidates = repository.cloudOrganizeCandidates()
+            if (candidates.isEmpty()) {
+                cloudUi.value = cloudUiState(config, status = CloudManualOrganizePolicy.completionMessage(0, 0, 0))
+                return@launch
+            }
+            var succeeded = 0
+            var failed = 0
+            candidates.forEachIndexed { index, content ->
+                cloudUi.value = cloudUiState(
+                    config,
+                    working = true,
+                    status = "${config.provider.displayName} 正在智能整理 ${index + 1}/${candidates.size} 条内容；仅发送本条标题、摘要、来源和当前规则主题。"
+                )
+                cloudService.analyzeContent(config, content)
+                    .onSuccess { analysis ->
+                        repository.applyCloudContentAnalysis(content, analysis)
+                        succeeded += 1
+                    }
+                    .onFailure { failed += 1 }
+            }
+            cloudUi.value = cloudUiState(
+                config,
+                status = CloudManualOrganizePolicy.completionMessage(candidates.size, succeeded, failed)
+            )
         }
     }
 

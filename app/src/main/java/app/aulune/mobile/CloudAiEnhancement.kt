@@ -68,6 +68,25 @@ data class CloudProfileAnalysis(
     val coreCandidate: String
 )
 
+/** 只在用户明确点击后挑选近期、可见且尚未经过云端整理的内容。 */
+internal object CloudManualOrganizePolicy {
+    const val DefaultBatchLimit = 5
+
+    fun selectCandidates(items: List<LocalContentEntity>, limit: Int = DefaultBatchLimit): List<LocalContentEntity> =
+        items.asSequence()
+            .filter { !it.hidden && it.title.isNotBlank() && it.analysisSource != "cloud" }
+            .sortedByDescending { it.updatedAt }
+            .take(limit.coerceAtLeast(0))
+            .toList()
+
+    fun completionMessage(requested: Int, succeeded: Int, failed: Int): String = when {
+        requested <= 0 -> "没有需要云端整理的内容；当前信息流继续使用本机规则。"
+        succeeded == requested -> "已整理 $succeeded 条内容；分类和候选理由已保存到本机，排序仍由本机规则执行。"
+        succeeded > 0 -> "已整理 $succeeded/$requested 条内容，另有 $failed 条失败；失败内容保持本机规则。"
+        else -> "本轮 $requested 条内容均未完成云端整理；已保留本机规则，请检查 Key、模型和网络。"
+    }
+}
+
 /**
  * 云端增强仅发送用户主动请求分析的内容元数据和聚合兴趣，不发送 B 站 Cookie、账号令牌、
  * 原始观看历史或设备标识。LLM 输出解析失败时返回 failure，由本机规则保持结果不变。
