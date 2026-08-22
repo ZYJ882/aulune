@@ -59,6 +59,25 @@ jobs:
           chmod +x scripts/resolve-android-source.sh
           scripts/resolve-android-source.sh "$GITHUB_WORKSPACE"
 
+      - name: Configure fixed Aulune signing
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.AULUNE_SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.AULUNE_SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.AULUNE_SIGNING_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          test -n "$SIGNING_KEYSTORE_BASE64" || { echo 'Missing AULUNE_SIGNING_KEYSTORE_BASE64 repository secret.' >&2; exit 1; }
+          test -n "$SIGNING_STORE_PASSWORD" || { echo 'Missing AULUNE_SIGNING_STORE_PASSWORD repository secret.' >&2; exit 1; }
+          test -n "$SIGNING_KEY_PASSWORD" || { echo 'Missing AULUNE_SIGNING_KEY_PASSWORD repository secret.' >&2; exit 1; }
+          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aulune-signing.jks"
+          chmod 600 "$RUNNER_TEMP/aulune-signing.jks"
+          {
+            echo "AULUNE_SIGNING_STORE_FILE=$RUNNER_TEMP/aulune-signing.jks"
+            echo "AULUNE_SIGNING_STORE_PASSWORD=$SIGNING_STORE_PASSWORD"
+            echo "AULUNE_SIGNING_KEY_ALIAS=aulune-release"
+            echo "AULUNE_SIGNING_KEY_PASSWORD=$SIGNING_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Build debug APK
         working-directory: ${{ steps.source.outputs.project_dir }}
         shell: bash

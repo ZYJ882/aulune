@@ -18,3 +18,15 @@
 ## PR 自动合并边界
 
 自动合并仅处理由本仓库账户创建的、非草稿、状态为可合并的 PR。来自外部 Fork 的 PR 不会自动合并。PR 合并后触发主分支构建；若当前 `versionName` 对应的发布标签已经存在，则 APK 会作为工作流产物保留，而不会覆盖既有正式 Release。
+
+## 固定签名与覆盖安装
+
+自动工作流不会使用每次运行临时生成的调试证书，而是要求仓库配置固定签名密钥。管理员需要在 **Settings → Secrets and variables → Actions → New repository secret** 中配置以下三个 Repository secrets：
+
+| Secret 名称 | 内容 |
+|---|---|
+| `AULUNE_SIGNING_KEYSTORE_BASE64` | 固定 `.jks` 文件经过 Base64 编码后的单行内容 |
+| `AULUNE_SIGNING_STORE_PASSWORD` | Keystore 密码 |
+| `AULUNE_SIGNING_KEY_PASSWORD` | `aulune-release` 别名对应的密钥密码 |
+
+工作流会在 Runner 临时目录还原密钥，Gradle 使用 `aulune-release` 签名配置生成 APK，构建结束后 Runner 销毁。只有使用同一签名证书构建的 APK 才能覆盖安装在设备上的旧 APK；如果更换签名证书，必须先卸载旧应用，或继续保留原密钥用于后续更新。

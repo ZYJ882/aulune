@@ -5,6 +5,14 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val signingStoreFile = System.getenv("AULUNE_SIGNING_STORE_FILE")
+val signingStorePassword = System.getenv("AULUNE_SIGNING_STORE_PASSWORD")
+val signingKeyAlias = System.getenv("AULUNE_SIGNING_KEY_ALIAS") ?: "aulune-release"
+val signingKeyPassword = System.getenv("AULUNE_SIGNING_KEY_PASSWORD")
+val hasCiSigning = !signingStoreFile.isNullOrBlank() &&
+    !signingStorePassword.isNullOrBlank() &&
+    !signingKeyPassword.isNullOrBlank()
+
 android {
     namespace = "app.aulune.mobile"
     compileSdk = 35
@@ -20,6 +28,22 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    if (hasCiSigning) {
+        signingConfigs {
+            create("auluneCi") {
+                storeFile = file(signingStoreFile!!)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+            }
+        }
+        buildTypes {
+            getByName("debug") {
+                signingConfig = signingConfigs.getByName("auluneCi")
+            }
+        }
     }
 
     compileOptions {
