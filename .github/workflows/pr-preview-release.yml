@@ -1,0 +1,74 @@
+name: Publish PR preview APK
+
+on:
+  workflow_run:
+    workflows: ["Android build and safe release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-preview:
+    name: Publish public PR preview
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Read PR build metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.expired == false) | select(.name | startswith("Aulune-APK-"))][0].id')"
+          if [[ -z "$artifact_id" || "$artifact_id" == "null" ]]; then
+            echo "No Aulune APK artifact was produced by PR build run ${RUN_ID}." >&2
+            exit 1
+          fi
+
+          echo "artifact_id=${artifact_id}" >> "$GITHUB_OUTPUT"
+          echo "tag=preview-pr-${PR_NUMBER}-run-${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "title=Aulune PR #${PR_NUMBER} Preview" >> "$GITHUB_OUTPUT"
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Download generated APK artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.metadata.outputs.artifact_id }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > artifact.zip
+          unzip -q artifact.zip -d dist
+          apk="$(find dist -type f -name '*.apk' -print -quit)"
+          if [[ -z "$apk" ]]; then
+            echo "Downloaded artifact does not contain an APK." >&2
+            exit 1
+          fi
+          echo "APK_PATH=$apk" >> "$GITHUB_ENV"
+
+      - name: Create public prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          TITLE: ${{ steps.metadata.outputs.title }}
+          PR_NUMBER: ${{ steps.metadata.outputs.pr_number }}
+          PR_HEAD_SHA: ${{ steps.metadata.outputs.pr_head_sha }}
+        shell: bash
+        run: |
+          gh release create "$TAG" "$APK_PATH" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "$TITLE" \
+            --prerelease \
+            --notes "Automated public preview APK from PR #${PR_NUMBER}. Source head: ${PR_HEAD_SHA}. This is a test build, not a stable release."

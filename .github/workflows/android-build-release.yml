@@ -1,0 +1,135 @@
+name: Android build and safe release
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "scripts/**"
+      - "incoming-source/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "settings.gradle.kts"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "scripts/**"
+      - "incoming-source/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "settings.gradle.kts"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      source_kind: ${{ steps.source.outputs.source_kind }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Resolve Android source
+        id: source
+        shell: bash
+        run: |
+          chmod +x scripts/resolve-android-source.sh
+          scripts/resolve-android-source.sh "$GITHUB_WORKSPACE"
+
+      - name: Build debug APK
+        working-directory: ${{ steps.source.outputs.project_dir }}
+        shell: bash
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Name build artifact
+        id: artifact
+        shell: bash
+        run: |
+          name="Aulune-APK-${{ steps.source.outputs.version }}-${{ github.event_name }}-${{ github.run_number }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.source.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish versioned release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out main branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check release tag availability
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        shell: bash
+        run: |
+          tag="v${VERSION}"
+          if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "Release $tag already exists; build artifact remains available from this workflow run."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download built APK
+        if: steps.release.outputs.publish == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: dist
+
+      - name: Create GitHub Release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_KIND: ${{ needs.build.outputs.source_kind }}
+        shell: bash
+        run: |
+          apk="$(find dist -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          gh release create "$TAG" "$apk" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Aulune v${VERSION}" \
+            --generate-notes \
+            --notes "Automated Android debug APK built from ${SOURCE_KIND}."
