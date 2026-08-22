@@ -89,7 +89,7 @@ jobs:
         run: |
           chmod +x scripts/set-build-version.sh
           version_code=$((100000000 + GITHUB_RUN_NUMBER))
-          version_name="${BASE_VERSION}+build.${GITHUB_RUN_NUMBER}"
+          version_name="${BASE_VERSION}"
           scripts/set-build-version.sh "$PROJECT_DIR" "$version_code" "$version_name"
           echo "version=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
