@@ -1214,7 +1214,7 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
         }
         item {
             AuluneCard(containerColor = colors.secondaryContainer.copy(alpha = 0.64f)) {
-                Text("隐私说明：云端 AI 只在你主动发送对话、点击“AI解析”、智能整理或更新长期画像候选时调用。不会发送登录 Cookie、账号令牌或原始观看记录。", color = colors.onSecondaryContainer, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("调用边界：云端 AI 只在你主动发送对话、点击“AI解析”、智能整理或更新长期画像候选时调用；未启用服务商时，内容继续使用本机规则。", color = colors.onSecondaryContainer, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
     }
