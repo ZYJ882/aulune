@@ -133,8 +133,8 @@ class DouyinPublicConnector(
                         .take(pageSize)
                         .mapNotNull { it.toDouyinContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -191,8 +191,8 @@ class XiaohongshuPublicConnector(
                         .take(pageSize)
                         .mapNotNull { it.toXhsContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -253,8 +253,8 @@ class ZhihuPublicConnector(
                         .take(pageSize)
                         .mapNotNull { it.toZhihuContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -316,8 +316,8 @@ class WeiboPublicConnector(
                         .take(pageSize)
                         .mapNotNull { it.toWeiboContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -433,8 +433,8 @@ class RedditPublicConnector(
                         .mapNotNull { it["data"] as? JsonObject }
                         .mapNotNull { it.toRedditContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -496,8 +496,8 @@ class V2exPublicConnector(
                         .take(pageSize)
                         .mapNotNull { it.toV2exContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -557,8 +557,8 @@ class BangumiPublicConnector(
                             ?: emptyList()
                     }.take(pageSize).mapNotNull { it.toBangumiContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 
@@ -646,8 +646,8 @@ class TwitterPublicConnector(
                         .take(pageSize)
                         .mapNotNull { it.toTwitterContent() }
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } catch (error: Exception) {
+                throw PlatformConnectorException(platform, error)
             }
         }
 

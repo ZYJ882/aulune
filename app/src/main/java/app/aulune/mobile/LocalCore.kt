@@ -530,6 +530,9 @@ private class LocalCoreRepository(private val dao: LocalCoreDao) {
         if (cookie.isBlank()) throw IllegalStateException("请先登录 ${platform.label}")
         val connector = PlatformAccountConnectorFactory.get(platform)
         val result = connector.readAccount(cookie)
+        if (!result.error.isNullOrBlank()) {
+            throw PlatformConnectorException(platform, IllegalStateException(result.error))
+        }
         val normalized = result.content.map(LocalAdaptiveCore::normalize)
         importContent(normalized)
         rebuildProfiles(force = true)
@@ -839,7 +842,8 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     fun refreshPlatformStatuses() {
         val context = getApplication<Application>()
         _platformLoginStatus.value = ContentPlatform.entries.associateWith { platform ->
-            if (PlatformCookieManager.isLoggedIn(context, platform)) "已授权，可读取账户数据" else "未登录；可尝试公开导入"
+            val authorization = if (PlatformCookieManager.isLoggedIn(context, platform)) "已授权，可读取账户数据" else "未登录；可尝试公开导入"
+            "$authorization · ${PlatformCapabilityMatrix.summary(platform)}"
         }
     }
 
@@ -965,13 +969,14 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             _isPlatformSyncing.value = true
             _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在导入 ${platform.label} 公开内容…")
-            runCatching {
-                val count = repository.importPlatformPublic(platform)
-                _platformSyncStatus.value = _platformSyncStatus.value + (platform to if (count > 0) "已导入 $count 条 ${platform.label} 内容" else "未取得公开内容；可能受限流、接口变化或网络影响")
-            }.onFailure { error ->
-                _platformSyncStatus.value = _platformSyncStatus.value + (platform to "${platform.label} 导入失败：${error.message ?: "请稍后重试"}")
-            }
+            val attempt = PlatformRetryPolicy.run { repository.importPlatformPublic(platform) }
+            _platformSyncStatus.value = _platformSyncStatus.value + (platform to when {
+                attempt.value == null -> "公开导入失败（${attempt.attempts} 次）：${attempt.failure?.display() ?: "未知错误"}"
+                attempt.value > 0 -> "已导入 ${attempt.value} 条 ${platform.label} 内容${if (attempt.attempts > 1) "（重试 ${attempt.attempts - 1} 次）" else ""}"
+                else -> "未取得公开内容；可能受限流、接口变化或网络影响"
+            })
             _isPlatformSyncing.value = false
+            refreshPlatformStatuses()
         }
     }
 
@@ -982,14 +987,15 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             _isPlatformSyncing.value = true
             ContentPlatform.entries.forEach { platform ->
                 _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在导入 ${platform.label}…")
-                runCatching {
-                    val count = repository.importPlatformPublic(platform)
-                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to if (count > 0) "已导入 $count 条" else "未取得公开内容")
-                }.onFailure { error ->
-                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to "失败：${error.message ?: "未知错误"}")
-                }
+                val attempt = PlatformRetryPolicy.run { repository.importPlatformPublic(platform) }
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to when {
+                    attempt.value == null -> "失败（${attempt.attempts} 次）：${attempt.failure?.display() ?: "未知错误"}"
+                    attempt.value > 0 -> "已导入 ${attempt.value} 条${if (attempt.attempts > 1) "（重试 ${attempt.attempts - 1} 次）" else ""}"
+                    else -> "未取得公开内容"
+                })
             }
             _isPlatformSyncing.value = false
+            refreshPlatformStatuses()
         }
     }
 
@@ -999,16 +1005,17 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             _isPlatformSyncing.value = true
             _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在同步 ${platform.label} 账号数据…")
-            runCatching {
-                val result = repository.syncPlatformAccount(platform)
-                val name = result.info.nickname.ifBlank { platform.label }
-                _platformSyncStatus.value = _platformSyncStatus.value +
-                    (platform to "已同步 $name 的 ${result.content.size} 条内容")
-            }.onFailure { error ->
-                _platformSyncStatus.value = _platformSyncStatus.value +
-                    (platform to "${platform.label} 同步失败：${error.message ?: "请先登录"}")
-            }
+            val attempt = PlatformRetryPolicy.run { repository.syncPlatformAccount(platform) }
+            _platformSyncStatus.value = _platformSyncStatus.value + (platform to when (val result = attempt.value) {
+                null -> "账户读取失败（${attempt.attempts} 次）：${attempt.failure?.display() ?: "未知错误"}"
+                else -> {
+                    val name = result.info.nickname.ifBlank { platform.label }
+                    if (result.error.isNullOrBlank()) "已同步 $name 的 ${result.content.size} 条内容${if (attempt.attempts > 1) "（重试 ${attempt.attempts - 1} 次）" else ""}"
+                    else "账户读取受限：${PlatformFailureClassifier.classify(IllegalStateException(result.error)).display()}"
+                }
+            })
             _isPlatformSyncing.value = false
+            refreshPlatformStatuses()
         }
     }
 
@@ -1024,15 +1031,15 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
                     return@forEach
                 }
                 _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在同步…")
-                runCatching {
-                    val result = repository.syncPlatformAccount(platform)
-                    val name = result.info.nickname.ifBlank { platform.label }
-                    _platformSyncStatus.value = _platformSyncStatus.value +
-                        (platform to "已同步 $name 的 ${result.content.size} 条")
-                }.onFailure { error ->
-                    _platformSyncStatus.value = _platformSyncStatus.value +
-                        (platform to "失败：${error.message ?: "未知错误"}")
-                }
+                val attempt = PlatformRetryPolicy.run { repository.syncPlatformAccount(platform) }
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to when (val result = attempt.value) {
+                    null -> "失败（${attempt.attempts} 次）：${attempt.failure?.display() ?: "未知错误"}"
+                    else -> {
+                        val name = result.info.nickname.ifBlank { platform.label }
+                        if (result.error.isNullOrBlank()) "已同步 $name 的 ${result.content.size} 条"
+                        else "账户读取受限：${PlatformFailureClassifier.classify(IllegalStateException(result.error)).display()}"
+                    }
+                })
             }
             _isPlatformSyncing.value = false
             refreshPlatformStatuses()
