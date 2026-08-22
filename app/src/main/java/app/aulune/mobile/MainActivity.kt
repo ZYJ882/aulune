@@ -835,9 +835,8 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
         item {
             Text("模型工作台", color = Ink, fontSize = 27.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(5.dp))
-            Text("所有服务商都可编辑 HTTPS 接口地址、选择协议、在线获取模型并手动填写模型名。配置与 Key 使用 Android Keystore 加密保存在本机。", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+            Text("预设服务商自动使用官方默认接口格式；你可编辑 HTTPS 接口地址、在线获取模型并手动填写模型名。仅自定义服务商需要选择协议。配置与 Key 使用 Android Keystore 加密保存在本机。", color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
         }
-        item { BilibiliAccountConnectorCard(localFeedViewModel) }
         item {
             Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AiProvider.entries.forEach { provider ->
@@ -871,17 +870,19 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                         value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("接口基础地址（可修改）") },
                         placeholder = { Text(editingProvider.defaultBaseUrl) }, modifier = Modifier.fillMaxWidth(), singleLine = true
                     )
-                    Spacer(Modifier.height(9.dp))
-                    Text("调用协议", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        ProviderProtocol.entries.forEach { candidate ->
-                            val selected = protocol == candidate
-                            Surface(
-                                color = if (selected) SoftViolet else Color(0xFFF6F5FA),
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.clickable { protocol = candidate }
-                            ) { Text(candidate.label, color = if (selected) Violet else Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) }
+                    if (editingProvider == AiProvider.Custom) {
+                        Spacer(Modifier.height(9.dp))
+                        Text("调用协议", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            ProviderProtocol.entries.forEach { candidate ->
+                                val selected = protocol == candidate
+                                Surface(
+                                    color = if (selected) SoftViolet else Color(0xFFF6F5FA),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.clickable { protocol = candidate }
+                                ) { Text(candidate.label, color = if (selected) Violet else Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) }
+                            }
                         }
                     }
                     Spacer(Modifier.height(10.dp))
@@ -894,7 +895,12 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                         onClick = {
                             isLoadingModels = true
                             modelStatus = "正在获取模型列表…"
-                            val requestSettings = ProviderSettings(apiKey.trim(), model.trim(), baseUrl.trim(), protocol)
+                            val requestSettings = ProviderSettings(
+                                apiKey = apiKey.trim(),
+                                model = model.trim(),
+                                baseUrl = baseUrl.trim(),
+                                protocol = if (editingProvider == AiProvider.Custom) protocol else editingProvider.protocol
+                            )
                             scope.launch {
                                 LlmClient().listModels(editingProvider, requestSettings)
                                     .onSuccess { models ->
@@ -903,7 +909,7 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                                     }
                                     .onFailure { error ->
                                         remoteModels = emptyList()
-                                        modelStatus = "获取失败：${error.message ?: "请检查 Key、地址和协议。"}"
+                                        modelStatus = "获取失败：${error.message ?: "请检查 Key 或接口地址。"}"
                                     }
                                 isLoadingModels = false
                             }
@@ -929,7 +935,12 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                     Spacer(Modifier.height(15.dp))
                     Button(
                         onClick = {
-                            val saved = ProviderSettings(apiKey.trim(), model.trim(), baseUrl.trim(), protocol)
+                            val saved = ProviderSettings(
+                                apiKey = apiKey.trim(),
+                                model = model.trim(),
+                                baseUrl = baseUrl.trim(),
+                                protocol = if (editingProvider == AiProvider.Custom) protocol else editingProvider.protocol
+                            )
                             store.setProviderSettings(editingProvider, saved)
                             localFeedViewModel.saveCloudAiConfig(
                                 provider = editingProvider,
@@ -952,7 +963,7 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
                 }
             }
         }
-        item { SectionTitle("协议说明") }
+        item { SectionTitle("预设服务商默认接口格式") }
         item {
             Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                 Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -966,62 +977,8 @@ private fun ModelSettingsScreen(store: AuluneStore, localFeedViewModel: LocalFee
         }
         item {
             Surface(color = Color(0xFFE8F7FC), shape = RoundedCornerShape(16.dp)) {
-                Text("隐私说明：云端 AI 只在你主动发送对话、点击“AI解析”或更新长期画像候选时调用。内容分析发送标题、摘要、来源和当前主题；画像生成只发送聚合兴趣和事件数。不会发送 B 站 Cookie、账号令牌或原始观看记录。", color = Color(0xFF24536B), fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(14.dp))
+                Text("隐私说明：云端 AI 只在你主动发送对话、点击“AI解析”或更新长期画像候选时调用。内容分析发送标题、摘要、来源和当前主题；画像生成只发送聚合兴趣和事件数。不会发送登录 Cookie、账号令牌或原始观看记录。", color = Color(0xFF24536B), fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(14.dp))
             }
-        }
-    }
-}
-
-@Composable
-private fun BilibiliAccountConnectorCard(localFeedViewModel: LocalFeedViewModel) {
-    val context = LocalContext.current
-    val localState by localFeedViewModel.uiState.collectAsState()
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEEF7FF))) {
-        Column(Modifier.padding(17.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(34.dp).clip(CircleShape).background(Color(0xFFD7F0FF)), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.Explore, contentDescription = null, tint = Cyan, modifier = Modifier.size(19.dp))
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("B 站账号连接", color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                    Text("扫码、密码、短信与会话入口", color = Muted, fontSize = 12.sp)
-                }
-            }
-            Spacer(Modifier.height(11.dp))
-            Text("先在官方页面登录，再点击“授权同步”；Aulune只读账号信息、收藏夹、观看历史和稍后再看，不执行点赞、收藏或删除操作。", color = Color(0xFF24536B), fontSize = 12.sp, lineHeight = 18.sp)
-            Spacer(Modifier.height(14.dp))
-            Button(
-                onClick = { context.startActivity(Intent(context, BilibiliLoginActivity::class.java)) },
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink),
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("选择登录方式") }
-            val profile = localState.bilibiliProfile
-            if (profile != null) {
-                Spacer(Modifier.height(8.dp))
-                Text("已授权：${profile.name}（Lv.${profile.level}）", color = Color(0xFF24536B), fontSize = 12.sp)
-            }
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = { localFeedViewModel.syncBilibiliAccount() },
-                enabled = !localState.isBilibiliImporting,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Cyan),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                if (localState.isBilibiliImporting) CircularProgressIndicator(Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
-                else Text("读取已授权账户数据")
-            }
-            Text(localState.bilibiliStatus, color = Color(0xFF24536B), fontSize = 12.sp, lineHeight = 18.sp)
-            TextButton(
-                onClick = { localFeedViewModel.clearBilibiliLocalData() },
-                modifier = Modifier.align(Alignment.End)
-            ) { Text("删除本机 B 站数据", color = Color(0xFFB3261E)) }
-            TextButton(
-                onClick = { context.startActivity(BilibiliWebActivity.createIntent(context, BilibiliDestination.Account)) },
-                modifier = Modifier.align(Alignment.End)
-            ) { Text("打开官方账号中心并授权") }
         }
     }
 }

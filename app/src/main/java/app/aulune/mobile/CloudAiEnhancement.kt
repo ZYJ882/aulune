@@ -16,7 +16,7 @@ data class CloudAiConfig(
 ) {
     val effectiveModel: String get() = model.ifBlank { provider.defaultModel }
     val effectiveBaseUrl: String get() = baseUrl.ifBlank { provider.defaultBaseUrl }
-    val effectiveProtocol: ProviderProtocol get() = protocol ?: provider.protocol
+    val effectiveProtocol: ProviderProtocol get() = ProviderSettings(protocol = protocol).effectiveProtocol(provider)
     val isUsable: Boolean get() = enabled && apiKey.isNotBlank()
     fun providerSettings(): ProviderSettings = ProviderSettings(apiKey, effectiveModel, effectiveBaseUrl, effectiveProtocol)
 }
@@ -42,12 +42,13 @@ class SecureCloudAiSettings(context: Context) {
     }.getOrDefault(CloudAiConfig())
 
     fun save(config: CloudAiConfig) {
+        val normalizedProtocol = if (config.provider == AiProvider.Custom) config.effectiveProtocol else config.provider.protocol
         preferences.edit()
             .putString("provider", config.provider.name)
             .putString("api_key", config.apiKey.trim())
             .putString("model", config.model.trim())
             .putString("base_url", config.baseUrl.trim())
-            .putString("protocol", config.protocol?.name.orEmpty())
+            .putString("protocol", normalizedProtocol.name)
             .putBoolean("enabled", config.enabled)
             .apply()
     }

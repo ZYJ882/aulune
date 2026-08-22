@@ -28,6 +28,17 @@ class ProviderConfigurationTest {
     }
 
     @Test
+    fun presetProvidersIgnoreStoredProtocolOverrides() {
+        val wrongOpenAiFormat = ProviderSettings(protocol = ProviderProtocol.GeminiGenerateContent)
+        val wrongClaudeFormat = ProviderSettings(protocol = ProviderProtocol.OpenAiCompatible)
+
+        assertEquals(ProviderProtocol.OpenAiCompatible, wrongOpenAiFormat.effectiveProtocol(AiProvider.Kimi))
+        assertEquals(ProviderProtocol.OpenAiCompatible, wrongOpenAiFormat.effectiveProtocol(AiProvider.OpenRouter))
+        assertEquals(ProviderProtocol.AnthropicMessages, wrongClaudeFormat.effectiveProtocol(AiProvider.Claude))
+        assertEquals(ProviderProtocol.GeminiGenerateContent, wrongClaudeFormat.effectiveProtocol(AiProvider.Gemini))
+    }
+
+    @Test
     fun normalizesChatAndModelCatalogEndpoints() {
         assertEquals("https://api.example/v1/chat/completions", LlmProtocolSupport.endpointUrl("https://api.example/v1/", "chat/completions"))
         assertEquals("https://api.example/v1/chat/completions", LlmProtocolSupport.endpointUrl("https://api.example/v1/chat/completions", "chat/completions"))

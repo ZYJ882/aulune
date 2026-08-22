@@ -54,7 +54,11 @@ data class ProviderSettings(
 ) {
     fun effectiveModel(provider: AiProvider): String = model.trim().ifBlank { provider.defaultModel }
     fun effectiveBaseUrl(provider: AiProvider): String = baseUrl.trim().ifBlank { provider.defaultBaseUrl }
-    fun effectiveProtocol(provider: AiProvider): ProviderProtocol = protocol ?: provider.protocol
+    /** 预设服务商使用官方默认协议；只有自定义服务商允许用户选择协议。 */
+    fun effectiveProtocol(provider: AiProvider): ProviderProtocol = when (provider) {
+        AiProvider.Custom -> protocol ?: provider.protocol
+        else -> provider.protocol
+    }
 }
 
 data class ProviderProfilesSnapshot(
@@ -180,9 +184,12 @@ class AuluneStore(context: Context) {
     }
 
     fun setProviderSettings(provider: AiProvider, settings: ProviderSettings) {
-        providerSettings[provider] = settings
+        val normalized = settings.copy(
+            protocol = if (provider == AiProvider.Custom) settings.effectiveProtocol(provider) else provider.protocol
+        )
+        providerSettings[provider] = normalized
         selectedProvider = provider
-        aiStatus = if (settings.apiKey.isBlank()) "本地对话模式" else "${provider.displayName} 已就绪"
+        aiStatus = if (normalized.apiKey.isBlank()) "本地对话模式" else "${provider.displayName} 已就绪"
         persist()
     }
 
