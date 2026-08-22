@@ -52,7 +52,7 @@ data class CuratedItem(
 )
 
 data class ConversationMessage(
-    val id: Int,
+    val id: Long,
     val fromUser: Boolean,
     val text: String,
     val time: String
@@ -74,12 +74,12 @@ class AuluneStore {
     fun addUserMessage(text: String) {
         val clean = text.trim()
         if (clean.isNotEmpty()) {
-            messages += ConversationMessage(messages.size + 1, true, clean, "刚刚")
+            messages += ConversationMessage(messages.size + 1L, true, clean, "刚刚")
         }
     }
 
     fun addAssistantMessage(text: String) {
-        messages += ConversationMessage(messages.size + 1, false, text.trim(), "刚刚")
+        messages += ConversationMessage(messages.size + 1L, false, text.trim(), "刚刚")
     }
 
     fun setProviderSettings(provider: AiProvider, settings: ProviderSettings) {
@@ -99,7 +99,7 @@ class AuluneStore {
 }
 
 private fun seedMessages() = listOf(
-    ConversationMessage(1, false, "我是Aulune。你可以让我梳理想法、解释问题，或一起制定下一步。", "09:20"),
-    ConversationMessage(2, true, "我希望把近期的工作节奏调得更稳一点。", "09:22"),
-    ConversationMessage(3, false, "可以。我们先不急着新增任务，先识别哪一部分最消耗你的注意力，再为它设计一个更轻的默认动作。", "09:22")
+    ConversationMessage(1L, false, "我是Aulune。你可以让我梳理想法、解释问题，或一起制定下一步。", "09:20"),
+    ConversationMessage(2L, true, "我希望把近期的工作节奏调得更稳一点。", "09:22"),
+    ConversationMessage(3L, false, "可以。我们先不急着新增任务，先识别哪一部分最消耗你的注意力，再为它设计一个更轻的默认动作。", "09:22")
 )

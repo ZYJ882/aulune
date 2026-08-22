@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
     Focus("灵感", Icons.Outlined.Home),
+    Library("内容库", Icons.Outlined.Bookmark),
     Compass("画像", Icons.Outlined.PersonOutline),
     Talk("对话", Icons.Outlined.ChatBubbleOutline),
     Models("模型", Icons.Outlined.Settings)
@@ -112,6 +113,8 @@ private fun AuluneApp() {
     val store = remember { AuluneStore() }
     val llmClient = remember { LlmClient() }
     val localFeedViewModel: LocalFeedViewModel = viewModel()
+    val localLibraryViewModel: LocalLibraryViewModel = viewModel()
+    val localConversationViewModel: LocalConversationViewModel = viewModel()
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
 
     MaterialTheme(
@@ -146,8 +149,14 @@ private fun AuluneApp() {
             Box(Modifier.padding(padding).fillMaxSize()) {
                 when (AppTab.entries[tabIndex]) {
                     AppTab.Focus -> FocusScreen(localFeedViewModel)
+                    AppTab.Library -> LibraryScreen(localLibraryViewModel)
                     AppTab.Compass -> CompassScreen(localFeedViewModel)
-                    AppTab.Talk -> TalkScreen(store, llmClient, onOpenModels = { tabIndex = AppTab.Models.ordinal })
+                    AppTab.Talk -> TalkScreen(
+                        store = store,
+                        client = llmClient,
+                        conversationViewModel = localConversationViewModel,
+                        onOpenModels = { tabIndex = AppTab.Models.ordinal }
+                    )
                     AppTab.Models -> ModelSettingsScreen(store, localFeedViewModel)
                 }
             }
@@ -241,6 +250,18 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                         Icon(Icons.Outlined.AccountCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("多平台账号", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("来源状态", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { viewModel.refreshPlatformStatuses() }) { Text("刷新", fontSize = 12.sp) }
+                }
+                if (localState.platformLoginStatus.isNotEmpty()) {
+                    Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFF7F7FB), RoundedCornerShape(8.dp)).padding(8.dp)) {
+                        localState.platformLoginStatus.forEach { (platform, status) ->
+                            Text("${platform.shortLabel}: $status", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                        }
                     }
                 }
                 // 多平台同步状态
@@ -383,6 +404,80 @@ private fun SourceBadge(channel: SourceChannel) {
 }
 
 @Composable
+private fun LibraryScreen(viewModel: LocalLibraryViewModel) {
+    val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Text("本地内容库", color = Ink, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(5.dp))
+            Text("保存、标记、最近打开和隐藏内容都只保留在这台手机。", color = Muted, fontSize = 13.sp)
+        }
+        item {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                LibrarySection.entries.forEach { section ->
+                    val selected = section == state.section
+                    Surface(
+                        color = if (selected) Violet else Color.White,
+                        shape = RoundedCornerShape(11.dp),
+                        modifier = Modifier.clickable { viewModel.select(section) }
+                    ) {
+                        Text(
+                            section.label,
+                            color = if (selected) Color.White else Ink,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp)
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusPill("稍后 ${state.totalSaved}", Color(0xFFE8F7FC), Cyan)
+                StatusPill("标记 ${state.totalMarked}", SoftViolet, Violet)
+                StatusPill("隐藏 ${state.totalHidden}", Color(0xFFF1F0F5), Muted)
+            }
+        }
+        if (state.items.isEmpty()) {
+            item {
+                Surface(color = Color.White, shape = RoundedCornerShape(18.dp), shadowElevation = 1.dp) {
+                    Text(state.emptyMessage, color = Muted, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(18.dp))
+                }
+            }
+        } else {
+            items(state.items, key = { it.contentKey }) { item ->
+                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(item.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(item.source, color = Violet, fontSize = 12.sp)
+                        Text(item.summary.ifBlank { "暂无摘要" }, color = Muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = {
+                                if (item.url.isNotBlank()) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.url)))
+                            }) { Text("打开") }
+                            TextButton(onClick = { viewModel.toggleSaved(item) }) { Text(if (item.saved) "移出稍后" else "保存") }
+                            TextButton(onClick = { viewModel.toggleMarked(item) }) { Text(if (item.marked) "取消标记" else "标记") }
+                            TextButton(onClick = {
+                                if (item.hidden) viewModel.restore(item) else viewModel.hide(item)
+                            }) { Text(if (item.hidden) "恢复" else "隐藏", color = Muted) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CompassScreen(viewModel: LocalFeedViewModel) {
     val localState by viewModel.uiState.collectAsState()
     LazyColumn(
@@ -427,13 +522,23 @@ private fun CompassScreen(viewModel: LocalFeedViewModel) {
                             )
                         }
                         Text(profile.summary, color = Color(0xFF4E495F), fontSize = 13.sp, lineHeight = 19.sp)
+                        if (profile.candidate.isBlank() && (profile.layer == ProfileLayer.Values || profile.layer == ProfileLayer.Core)) {
+                            TextButton(onClick = { viewModel.resetProfileLayer(profile.layer) }) {
+                                Text("重新观察", color = Muted, fontSize = 12.sp)
+                            }
+                        }
                         if (profile.candidate.isNotBlank()) {
                             Surface(color = SoftViolet, shape = RoundedCornerShape(12.dp)) {
                                 Text(profile.candidate, color = Ink, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.padding(11.dp))
                             }
                             if (profile.layer == ProfileLayer.Values || profile.layer == ProfileLayer.Core) {
-                                TextButton(onClick = { viewModel.confirmProfileLayer(profile.layer) }) {
-                                    Text("确认写入本机${profile.layer.label}", fontSize = 12.sp)
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    TextButton(onClick = { viewModel.confirmProfileLayer(profile.layer) }) {
+                                        Text("确认写入本机${profile.layer.label}", fontSize = 12.sp)
+                                    }
+                                    TextButton(onClick = { viewModel.resetProfileLayer(profile.layer) }) {
+                                        Text("重新观察", color = Muted, fontSize = 12.sp)
+                                    }
                                 }
                             }
                         }
@@ -550,52 +655,49 @@ private fun DimensionBar(left: String, right: String, value: Float) {
 }
 
 @Composable
-private fun TalkScreen(store: AuluneStore, client: LlmClient, onOpenModels: () -> Unit) {
+private fun TalkScreen(
+    store: AuluneStore,
+    client: LlmClient,
+    conversationViewModel: LocalConversationViewModel,
+    onOpenModels: () -> Unit
+) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var draft by rememberSaveable { mutableStateOf("") }
+    val messages by conversationViewModel.messages.collectAsState()
+    val isGenerating by conversationViewModel.isGenerating.collectAsState()
+    val status by conversationViewModel.status.collectAsState()
     val activeSettings = store.providerSettings[store.selectedProvider] ?: ProviderSettings(model = store.selectedProvider.defaultModel)
-    LaunchedEffect(store.messages.size, store.isGenerating) { if (store.messages.isNotEmpty()) listState.animateScrollToItem(store.messages.lastIndex) }
+    LaunchedEffect(messages.size, isGenerating) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
 
     fun submit() {
-        val input = draft.trim()
-        if (input.isBlank() || store.isGenerating) return
-        if (activeSettings.apiKey.isBlank()) {
-            store.addAssistantMessage("请先打开“模型”页，选择 ${store.selectedProvider.displayName} 并填写 API Key。普通对话的 Key 仅保留在当前会话；点击“保存并启用云端增强”后，内容分析和画像候选会使用 Android Keystore 加密保存的 Key。")
-            return
-        }
-        store.addUserMessage(input)
+        if (draft.isBlank() || isGenerating) return
+        conversationViewModel.send(draft, store.selectedProvider, activeSettings, client)
         draft = ""
-        scope.launch {
-            store.updateGenerating(true)
-            client.generate(store.selectedProvider, activeSettings, store.messages.toList())
-                .onSuccess { answer ->
-                    store.addAssistantMessage(answer)
-                    store.updateAiStatus("${store.selectedProvider.displayName} 已完成")
-                }
-                .onFailure { error ->
-                    store.addAssistantMessage("调用失败：${error.message ?: "请检查网络、Key 和模型名称。"}")
-                    store.updateAiStatus("调用未成功")
-                }
-            store.updateGenerating(false)
-        }
     }
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 21.dp, bottom = 10.dp)) {
-            Text("和想法一起工作", color = Ink, fontSize = 27.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text("选择一个模型，把模糊的念头变成下一步。", color = Muted, fontSize = 13.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("和想法一起工作", color = Ink, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("对话会保存在本机；模型只在你配置并发送后调用。", color = Muted, fontSize = 13.sp)
+                }
+                TextButton(onClick = { conversationViewModel.clear() }) { Text("清空", color = Muted) }
+            }
         }
-        ProviderBar(provider = store.selectedProvider, configured = activeSettings.apiKey.isNotBlank(), status = store.aiStatus, onClick = onOpenModels)
+        ProviderBar(provider = store.selectedProvider, configured = activeSettings.apiKey.isNotBlank(), status = status, onClick = onOpenModels)
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(store.messages, key = { it.id }) { message -> MessageBubble(message) }
-            if (store.isGenerating) item { ThinkingBubble(store.selectedProvider.displayName) }
+            items(messages, key = { it.id }) { message -> MessageBubble(message) }
+            if (isGenerating) item { ThinkingBubble(store.selectedProvider.displayName) }
         }
         HorizontalDivider(color = Color(0xFFE9E8EF))
         Row(
@@ -609,8 +711,8 @@ private fun TalkScreen(store: AuluneStore, client: LlmClient, onOpenModels: () -
                 minLines = 1, maxLines = 3
             )
             Spacer(Modifier.width(8.dp))
-            IconButton(onClick = { submit() }, enabled = !store.isGenerating, modifier = Modifier.size(46.dp).clip(CircleShape).background(if (draft.isBlank() || store.isGenerating) Color(0xFFE8E7EE) else Violet)) {
-                Icon(Icons.Outlined.Send, contentDescription = "发送", tint = if (draft.isBlank() || store.isGenerating) Muted else Color.White)
+            IconButton(onClick = { submit() }, enabled = !isGenerating, modifier = Modifier.size(46.dp).clip(CircleShape).background(if (draft.isBlank() || isGenerating) Color(0xFFE8E7EE) else Violet)) {
+                Icon(Icons.Outlined.Send, contentDescription = "发送", tint = if (draft.isBlank() || isGenerating) Muted else Color.White)
             }
         }
     }

@@ -104,10 +104,22 @@ data class LocalPreferenceEntity(
     val updatedAt: Long
 )
 
+/** 对话历史只保存于本机，用于让用户在重启后继续同一段思考。 */
+@Entity(tableName = "local_chat_message")
+data class LocalChatMessageEntity(
+    @androidx.room.PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val fromUser: Boolean,
+    val text: String,
+    val createdAt: Long
+)
+
 @Dao
 interface LocalCoreDao {
     @Query("SELECT * FROM local_content WHERE hidden = 0")
     fun observeVisibleContent(): Flow<List<LocalContentEntity>>
+
+    @Query("SELECT * FROM local_content ORDER BY updatedAt DESC")
+    fun observeAllContent(): Flow<List<LocalContentEntity>>
 
     @Query("SELECT COUNT(*) FROM local_content WHERE saved = 1")
     fun observeSavedCount(): Flow<Int>
@@ -129,6 +141,18 @@ interface LocalCoreDao {
 
     @Query("SELECT * FROM local_profile ORDER BY layer ASC")
     suspend fun profilesNow(): List<LocalProfileEntity>
+
+    @Query("SELECT * FROM local_chat_message ORDER BY createdAt ASC, id ASC")
+    fun observeChatMessages(): Flow<List<LocalChatMessageEntity>>
+
+    @Query("SELECT COUNT(*) FROM local_chat_message")
+    suspend fun chatMessageCount(): Int
+
+    @Insert
+    suspend fun insertChatMessage(message: LocalChatMessageEntity)
+
+    @Query("DELETE FROM local_chat_message")
+    suspend fun clearChatMessages()
 
     @Query("SELECT COUNT(*) FROM behavior_event")
     suspend fun eventCount(): Int
@@ -180,6 +204,9 @@ interface LocalCoreDao {
 
     @Query("SELECT * FROM local_profile WHERE layer = :layer LIMIT 1")
     suspend fun profile(layer: String): LocalProfileEntity?
+
+    @Query("DELETE FROM local_profile WHERE layer = :layer")
+    suspend fun deleteProfile(layer: String)
 
     @Query("DELETE FROM local_feedback WHERE contentKey = :contentKey AND targetType = :targetType AND targetKey = :targetKey")
     suspend fun clearFeedbackTarget(contentKey: String, targetType: String, targetKey: String)
@@ -234,9 +261,10 @@ interface LocalCoreDao {
         InterestEntity::class,
         LocalFeedbackEntity::class,
         LocalProfileEntity::class,
-        LocalPreferenceEntity::class
+        LocalPreferenceEntity::class,
+        LocalChatMessageEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AuluneLocalDatabase : RoomDatabase() {
@@ -274,11 +302,17 @@ abstract class AuluneLocalDatabase : RoomDatabase() {
             }
         }
 
+        private val Migration4To5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_chat_message (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, fromUser INTEGER NOT NULL, text TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+            }
+        }
+
         fun create(context: Context): AuluneLocalDatabase = Room.databaseBuilder(
             context.applicationContext,
             AuluneLocalDatabase::class.java,
             "aulune-local.db"
-        ).addMigrations(Migration1To2, Migration2To3, Migration3To4).build()
+        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5).build()
     }
 }
 
@@ -329,12 +363,20 @@ data class LocalFeedUiState(
     val explanation: String = "推荐、收藏、反馈和行为事件仅保存在这台手机。",
     val isPlatformSyncing: Boolean = false,
     val platformSyncStatus: Map<ContentPlatform, String> = emptyMap(),
+    val platformLoginStatus: Map<ContentPlatform, String> = emptyMap(),
 )
 
 private data class CloudProfileInput(
     val interests: List<InterestEntity>,
     val intent: SessionIntent,
     val eventCount: Int
+)
+
+private data class PlatformIntegrationState(
+    val cloud: CloudAiUiState,
+    val syncing: Boolean,
+    val syncStatus: Map<ContentPlatform, String>,
+    val loginStatus: Map<ContentPlatform, String>
 )
 
 private data class RankingSnapshot(
@@ -397,6 +439,12 @@ private class LocalCoreRepository(private val dao: LocalCoreDao) {
         if (layer !in setOf(ProfileLayer.Values, ProfileLayer.Core)) return
         val current = dao.profile(layer.name) ?: return
         dao.upsertProfiles(listOf(LocalProfileBuilder.confirm(current, System.currentTimeMillis())))
+    }
+
+    suspend fun resetProfileLayer(layer: ProfileLayer) {
+        if (layer !in setOf(ProfileLayer.Values, ProfileLayer.Core)) return
+        dao.deleteProfile(layer.name)
+        rebuildProfiles(force = true)
     }
 
     suspend fun importBilibiliPopular(): Int = importContent(BilibiliPublicConnector().fetchPopular())
@@ -729,8 +777,9 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     val platformSyncStatus: StateFlow<Map<ContentPlatform, String>> = _platformSyncStatus
     private val _isPlatformSyncing = MutableStateFlow(false)
     val isPlatformSyncing: StateFlow<Boolean> = _isPlatformSyncing
-    private val integrationState = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus) { cloud, syncing, status ->
-        Triple(cloud, syncing, status)
+    private val _platformLoginStatus = MutableStateFlow<Map<ContentPlatform, String>>(emptyMap())
+    private val integrationState = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus, _platformLoginStatus) { cloud, syncing, syncStatus, loginStatus ->
+        PlatformIntegrationState(cloud, syncing, syncStatus, loginStatus)
     }
 
     val uiState: StateFlow<LocalFeedUiState> = combine(
@@ -740,7 +789,10 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         sessionIntent,
         integrationState
     ) { snapshot, rotationIndex, sync, intent, integration ->
-        val (cloud, platformSyncing, platformStatus) = integration
+        val cloud = integration.cloud
+        val platformSyncing = integration.syncing
+        val platformStatus = integration.syncStatus
+        val platformLoginStatus = integration.loginStatus
         val ordered = snapshot.content
             .map(LocalAdaptiveCore::normalize)
             .filterNot { LocalAdaptiveCore.shouldExclude(it, snapshot.feedback) }
@@ -770,6 +822,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             },
             isPlatformSyncing = platformSyncing,
             platformSyncStatus = platformStatus,
+            platformLoginStatus = platformLoginStatus,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocalFeedUiState())
 
@@ -779,6 +832,14 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             sessionIntent.value = repository.loadIntent()
             repository.ensureSeedContent()
             repository.applyInterestLifecycle()
+            refreshPlatformStatuses()
+        }
+    }
+
+    fun refreshPlatformStatuses() {
+        val context = getApplication<Application>()
+        _platformLoginStatus.value = ContentPlatform.entries.associateWith { platform ->
+            if (PlatformCookieManager.isLoggedIn(context, platform)) "已授权，可读取账户数据" else "未登录；可尝试公开导入"
         }
     }
 
@@ -863,6 +924,10 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { repository.confirmProfileLayer(layer) }
     }
 
+    fun resetProfileLayer(layer: ProfileLayer) {
+        viewModelScope.launch { repository.resetProfileLayer(layer) }
+    }
+
     fun importBilibiliPublicContent() = runBilibiliSync("正在导入 B 站公开热门内容…") {
         val count = repository.importBilibiliPopular()
         "已将 $count 条 B 站公开内容保存到本机信息流。"
@@ -902,7 +967,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在导入 ${platform.label} 公开内容…")
             runCatching {
                 val count = repository.importPlatformPublic(platform)
-                _platformSyncStatus.value = _platformSyncStatus.value + (platform to "已导入 $count 条 ${platform.label} 内容")
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to if (count > 0) "已导入 $count 条 ${platform.label} 内容" else "未取得公开内容；可能受限流、接口变化或网络影响")
             }.onFailure { error ->
                 _platformSyncStatus.value = _platformSyncStatus.value + (platform to "${platform.label} 导入失败：${error.message ?: "请稍后重试"}")
             }
@@ -919,7 +984,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
                 _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在导入 ${platform.label}…")
                 runCatching {
                     val count = repository.importPlatformPublic(platform)
-                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to "已导入 $count 条")
+                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to if (count > 0) "已导入 $count 条" else "未取得公开内容")
                 }.onFailure { error ->
                     _platformSyncStatus.value = _platformSyncStatus.value + (platform to "失败：${error.message ?: "未知错误"}")
                 }
@@ -970,6 +1035,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
             _isPlatformSyncing.value = false
+            refreshPlatformStatuses()
         }
     }
 

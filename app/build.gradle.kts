@@ -21,8 +21,8 @@ android {
         applicationId = "app.aulune.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100000026
-        versionName = "1.3.3"
+        versionCode = 100000027
+        versionName = "1.4.0"
     }
 
     buildFeatures {
