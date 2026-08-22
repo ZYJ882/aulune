@@ -39,6 +39,8 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
@@ -214,6 +216,41 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                     }
                 }
                 Text(localState.bilibiliStatus, color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                // 多平台内容导入与账号管理
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { viewModel.importAllPlatformsPublic() },
+                        enabled = !localState.isPlatformSyncing,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5), contentColor = Color.White),
+                        modifier = Modifier.weight(1f).height(44.dp)
+                    ) {
+                        if (localState.isPlatformSyncing) CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        else {
+                            Icon(Icons.Outlined.Public, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("全平台导入", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    Button(
+                        onClick = { context.startActivity(Intent(context, MultiPlatformLoginActivity::class.java)) },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047), contentColor = Color.White),
+                        modifier = Modifier.weight(1f).height(44.dp)
+                    ) {
+                        Icon(Icons.Outlined.AccountCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("多平台账号", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                // 多平台同步状态
+                if (localState.platformSyncStatus.isNotEmpty()) {
+                    Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp)).padding(8.dp)) {
+                        localState.platformSyncStatus.forEach { (platform, status) ->
+                            Text("${platform.shortLabel}: $status", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                        }
+                    }
+                }
                 Text("云端 AI：${localState.cloudAi.status}", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
                 Button(
                     onClick = { viewModel.rotateFeed() },

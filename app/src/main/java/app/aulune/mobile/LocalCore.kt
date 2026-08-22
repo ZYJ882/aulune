@@ -216,6 +216,15 @@ interface LocalCoreDao {
 
     @Query("DELETE FROM local_feedback WHERE contentKey LIKE 'bilibili:%'")
     suspend fun deleteBilibiliFeedback()
+
+    @Query("DELETE FROM local_content WHERE contentKey LIKE :prefix")
+    suspend fun deleteContentByPrefix(prefix: String)
+
+    @Query("DELETE FROM behavior_event WHERE contentKey LIKE :prefix")
+    suspend fun deleteEventsByPrefix(prefix: String)
+
+    @Query("DELETE FROM local_feedback WHERE contentKey LIKE :prefix")
+    suspend fun deleteFeedbackByPrefix(prefix: String)
 }
 
 @Database(
@@ -317,7 +326,9 @@ data class LocalFeedUiState(
     val intent: SessionIntent = SessionIntent.Balanced,
     val profiles: List<LocalProfileUi> = emptyList(),
     val cloudAi: CloudAiUiState = CloudAiUiState(),
-    val explanation: String = "推荐、收藏、反馈和行为事件仅保存在这台手机。"
+    val explanation: String = "推荐、收藏、反馈和行为事件仅保存在这台手机。",
+    val isPlatformSyncing: Boolean = false,
+    val platformSyncStatus: Map<ContentPlatform, String> = emptyMap(),
 )
 
 private data class CloudProfileInput(
@@ -436,6 +447,83 @@ private class LocalCoreRepository(private val dao: LocalCoreDao) {
         dao.deleteBilibiliContent()
         rebuildInterestsFromRemainingEvents()
         rebuildProfiles(force = true)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  多平台内容导入
+    // ═══════════════════════════════════════════════════════════
+
+    /** 导入指定平台的公开内容 */
+    suspend fun importPlatformPublic(platform: ContentPlatform): Int {
+        val connector = PlatformConnectorFactory.getPublic(platform)
+        val items = connector.fetchPublic(pageSize = 20)
+        val normalized = items.map(LocalAdaptiveCore::normalize)
+        return importContent(normalized)
+    }
+
+    /** 导入所有平台的公开内容 */
+    suspend fun importAllPlatformsPublic(): Map<ContentPlatform, Int> {
+        val results = mutableMapOf<ContentPlatform, Int>()
+        ContentPlatform.entries.forEach { platform ->
+            runCatching {
+                results[platform] = importPlatformPublic(platform)
+            }.onFailure {
+                results[platform] = 0
+            }
+        }
+        rebuildProfiles(force = true)
+        return results
+    }
+
+    /** 同步指定平台的账号数据（收藏/历史等） */
+    suspend fun syncPlatformAccount(platform: ContentPlatform): PlatformAccountReadResult {
+        val context = app.aulune.mobile.PlatformCookieManager::class.java
+        val cookie = getPlatformCookie(platform)
+        if (cookie.isBlank()) throw IllegalStateException("请先登录 ${platform.label}")
+        val connector = PlatformAccountConnectorFactory.get(platform)
+        val result = connector.readAccount(cookie)
+        val normalized = result.content.map(LocalAdaptiveCore::normalize)
+        importContent(normalized)
+        rebuildProfiles(force = true)
+        return result
+    }
+
+    /** 同步所有已登录平台的账号数据 */
+    suspend fun syncAllPlatformAccounts(): Map<ContentPlatform, PlatformAccountReadResult> {
+        val results = mutableMapOf<ContentPlatform, PlatformAccountReadResult>()
+        ContentPlatform.entries.forEach { platform ->
+            runCatching {
+                val cookie = getPlatformCookie(platform)
+                if (cookie.isNotBlank()) {
+                    results[platform] = syncPlatformAccount(platform)
+                }
+            }.onFailure {
+                // 忽略单个平台失败
+            }
+        }
+        return results
+    }
+
+    /** 获取指定平台的 Cookie */
+    private fun getPlatformCookie(platform: ContentPlatform): String {
+        val ctx = appContext ?: return ""
+        return PlatformCookieManager.getCookie(ctx, platform)
+    }
+
+    /** 清除指定平台的本地内容 */
+    suspend fun clearPlatformContent(platform: ContentPlatform) {
+        val prefix = platform.contentKeyPrefix
+        dao.deleteContentByPrefix(prefix)
+        dao.deleteEventsByPrefix(prefix)
+        dao.deleteFeedbackByPrefix(prefix)
+        rebuildInterestsFromRemainingEvents()
+        rebuildProfiles(force = true)
+    }
+
+    companion object {
+        /** 全局 Application Context 引用，由 LocalFeedViewModel 初始化时设置 */
+        @Volatile
+        var appContext: android.content.Context? = null
     }
 
     suspend fun toggleMarked(item: CuratedItem) {
@@ -637,14 +725,22 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     private val cloudService = CloudAiSemanticService()
     private val cloudConfig = MutableStateFlow(secureCloudSettings.load())
     private val cloudUi = MutableStateFlow(cloudUiState(secureCloudSettings.load()))
+    private val _platformSyncStatus = MutableStateFlow<Map<ContentPlatform, String>>(emptyMap())
+    val platformSyncStatus: StateFlow<Map<ContentPlatform, String>> = _platformSyncStatus
+    private val _isPlatformSyncing = MutableStateFlow(false)
+    val isPlatformSyncing: StateFlow<Boolean> = _isPlatformSyncing
+    private val integrationState = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus) { cloud, syncing, status ->
+        Triple(cloud, syncing, status)
+    }
 
     val uiState: StateFlow<LocalFeedUiState> = combine(
         repository.observeRankingSnapshot(),
         rotation,
         bilibiliSync,
         sessionIntent,
-        cloudUi
-    ) { snapshot, rotationIndex, sync, intent, cloud ->
+        integrationState
+    ) { snapshot, rotationIndex, sync, intent, integration ->
+        val (cloud, platformSyncing, platformStatus) = integration
         val ordered = snapshot.content
             .map(LocalAdaptiveCore::normalize)
             .filterNot { LocalAdaptiveCore.shouldExclude(it, snapshot.feedback) }
@@ -671,11 +767,14 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
                 top.lifecycle.toLifecycle() == InterestLifecycle.Trial -> "「${top.theme}」正在观察期，已有 ${top.evidenceCount} 条本机证据；重复行为后才会进入活跃推荐。"
                 top.lifecycle.toLifecycle() == InterestLifecycle.Decaying -> "「${top.theme}」近期证据较少，已自动降温；新的正向行为会重新激活它。"
                 else -> "本机画像目前更关注「${top.theme}」，已积累 ${top.evidenceCount} 条行为证据。"
-            }
+            },
+            isPlatformSyncing = platformSyncing,
+            platformSyncStatus = platformStatus,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocalFeedUiState())
 
     init {
+        LocalCoreRepository.appContext = getApplication()
         viewModelScope.launch {
             sessionIntent.value = repository.loadIntent()
             repository.ensureSeedContent()
@@ -788,6 +887,97 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             repository.clearBilibiliLocalData()
             BilibiliSession.clear()
             bilibiliSync.value = BilibiliSyncUiState(message = "已删除本机 B 站收藏、历史、反馈与行为事件，并清除读取授权。")
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  多平台同步
+    // ═══════════════════════════════════════════════════════════
+
+    /** 导入指定平台的公开内容 */
+    fun importPlatformPublic(platform: ContentPlatform) {
+        if (_isPlatformSyncing.value) return
+        viewModelScope.launch {
+            _isPlatformSyncing.value = true
+            _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在导入 ${platform.label} 公开内容…")
+            runCatching {
+                val count = repository.importPlatformPublic(platform)
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to "已导入 $count 条 ${platform.label} 内容")
+            }.onFailure { error ->
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to "${platform.label} 导入失败：${error.message ?: "请稍后重试"}")
+            }
+            _isPlatformSyncing.value = false
+        }
+    }
+
+    /** 导入所有平台的公开内容 */
+    fun importAllPlatformsPublic() {
+        if (_isPlatformSyncing.value) return
+        viewModelScope.launch {
+            _isPlatformSyncing.value = true
+            ContentPlatform.entries.forEach { platform ->
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在导入 ${platform.label}…")
+                runCatching {
+                    val count = repository.importPlatformPublic(platform)
+                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to "已导入 $count 条")
+                }.onFailure { error ->
+                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to "失败：${error.message ?: "未知错误"}")
+                }
+            }
+            _isPlatformSyncing.value = false
+        }
+    }
+
+    /** 同步指定平台的账号数据 */
+    fun syncPlatformAccount(platform: ContentPlatform) {
+        if (_isPlatformSyncing.value) return
+        viewModelScope.launch {
+            _isPlatformSyncing.value = true
+            _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在同步 ${platform.label} 账号数据…")
+            runCatching {
+                val result = repository.syncPlatformAccount(platform)
+                val name = result.info.nickname.ifBlank { platform.label }
+                _platformSyncStatus.value = _platformSyncStatus.value +
+                    (platform to "已同步 $name 的 ${result.content.size} 条内容")
+            }.onFailure { error ->
+                _platformSyncStatus.value = _platformSyncStatus.value +
+                    (platform to "${platform.label} 同步失败：${error.message ?: "请先登录"}")
+            }
+            _isPlatformSyncing.value = false
+        }
+    }
+
+    /** 同步所有已登录平台的账号数据 */
+    fun syncAllPlatformAccounts() {
+        if (_isPlatformSyncing.value) return
+        viewModelScope.launch {
+            _isPlatformSyncing.value = true
+            ContentPlatform.entries.forEach { platform ->
+                val cookie = PlatformCookieManager.getCookie(getApplication(), platform)
+                if (cookie.isBlank()) {
+                    _platformSyncStatus.value = _platformSyncStatus.value + (platform to "未登录，跳过")
+                    return@forEach
+                }
+                _platformSyncStatus.value = _platformSyncStatus.value + (platform to "正在同步…")
+                runCatching {
+                    val result = repository.syncPlatformAccount(platform)
+                    val name = result.info.nickname.ifBlank { platform.label }
+                    _platformSyncStatus.value = _platformSyncStatus.value +
+                        (platform to "已同步 $name 的 ${result.content.size} 条")
+                }.onFailure { error ->
+                    _platformSyncStatus.value = _platformSyncStatus.value +
+                        (platform to "失败：${error.message ?: "未知错误"}")
+                }
+            }
+            _isPlatformSyncing.value = false
+        }
+    }
+
+    /** 清除指定平台的本地内容 */
+    fun clearPlatformLocalData(platform: ContentPlatform) {
+        viewModelScope.launch {
+            repository.clearPlatformContent(platform)
+            _platformSyncStatus.value = _platformSyncStatus.value + (platform to "已清除本地内容")
         }
     }
 

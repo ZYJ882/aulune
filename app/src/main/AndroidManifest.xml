@@ -23,6 +23,15 @@
             android:exported="false"
             android:label="账号管理" />
         <activity
+            android:name=".MultiPlatformLoginActivity"
+            android:exported="false"
+            android:label="多平台账号管理" />
+        <activity
+            android:name=".PlatformWebLoginActivity"
+            android:exported="false"
+            android:label="平台登录"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>

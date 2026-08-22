@@ -26,7 +26,11 @@ class BilibiliPublicConnector(
         .callTimeout(15, TimeUnit.SECONDS)
         .build(),
     private val json: Json = Json { ignoreUnknownKeys = true }
-) {
+) : PlatformPublicConnector {
+    override val platform = ContentPlatform.BILIBILI
+
+    override suspend fun fetchPublic(page: Int, pageSize: Int): List<LocalContentEntity> = fetchPopular(page, pageSize)
+
     suspend fun fetchPopular(page: Int = 1, pageSize: Int = 12): List<LocalContentEntity> = withContext(Dispatchers.IO) {
         val url = "https://api.bilibili.com/x/web-interface/popular?pn=${page.coerceAtLeast(1)}&ps=${pageSize.coerceIn(1, 20)}"
         val request = Request.Builder()
