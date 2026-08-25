@@ -75,7 +75,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 private val LoginCanvas = ComposeColor(0xFFF9FCEF)
 private val LoginCard = ComposeColor(0xFFEFF2EA)
@@ -93,14 +95,38 @@ private enum class SafeLoginMethod(val title: String, val icon: ImageVector) {
 }
 
 class BilibiliLoginActivity : ComponentActivity() {
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             BilibiliLoginPage(
                 onClose = ::finish,
-                onLoginSuccess = { finish() },
+                onLoginSuccess = {
+                    scope.launch {
+                        try {
+                            val accountManager = BilibiliAccountManager.get(this@BilibiliLoginActivity)
+                            val cookie = accountManager.currentCookie
+                            if (cookie.isNotBlank()) {
+                                val connector = BilibiliAccountConnector()
+                                val result = connector.readFirstPage(cookie)
+                                val db = AuluneLocalDatabase.create(this@BilibiliLoginActivity)
+                                val repo = LocalCoreRepository(db.localCoreDao())
+                                result.contents.forEach { entity ->
+                                    repo.importContent(listOf(entity))
+                                }
+                            }
+                        } catch (_: Exception) { }
+                        finish()
+                    }
+                },
             )
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
     }
 
     companion object {

@@ -787,7 +787,7 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         }
     }
 
-    private suspend fun importContent(incoming: List<LocalContentEntity>): Int {
+    suspend fun importContent(incoming: List<LocalContentEntity>): Int {
         if (incoming.isEmpty()) return 0
         val normalized = incoming.map(LocalAdaptiveCore::normalize)
         val existing = dao.contentByKeys(normalized.map { it.contentKey }).associateBy { it.contentKey }
