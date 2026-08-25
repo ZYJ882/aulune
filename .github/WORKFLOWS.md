@@ -1,6 +1,12 @@
 # Aulune 自动构建与发布
 
-本仓库提供两条自动化路径，均会使用 Java 17 构建 Android Debug APK，并将构建结果上传为 GitHub Release 资产。
+本仓库保留两条 GitHub 自动化路径，均会使用 Java 17 构建 Android Debug APK，并将构建结果上传为 GitHub Release 资产。常规版本更新默认由受控本地环境直接构建、验证并上传 Release 资产；GitHub 工作流作为需要托管构建或验证时的备用路径。
+
+## 本地直接发布与跳过标记
+
+本地直接发布的顺序是：完成本地构建与验证，上传固定签名 APK、源码归档和 SHA-256 清单至对应 GitHub Release，再同步源码提交。该同步提交的主题或正文必须包含 GitHub Actions 标准标记 `[skip ci]`，例如 `release: publish Aulune v1.8.2 [skip ci]`。此标记会跳过由 `push` 或 `pull_request` 触发的工作流，防止 GitHub 重复构建；它不会删除、禁用或修改本仓库的工作流文件。
+
+不要在需要 GitHub 托管构建、PR 验证或 `source-upload` 自动构建时添加 `[skip ci]`。直接发布仍必须使用与既有 Release 相同的固定签名证书，并确保 `versionCode` 递增。
 
 | 使用场景 | 操作方式 | 自动结果 |
 |---|---|---|

@@ -79,6 +79,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 GitHub Release 中的 APK 使用 Aulune 固定签名密钥构建。安装固定签名版本后，后续同包名且内部版本号更高的 APK 可直接覆盖升级。
 
+后续常规更新默认采用**本地直接发布**：先在受控本地环境完成构建与验证，再上传 APK、源码归档和 SHA-256 清单至 GitHub Release，最后同步源码。用于同步该直接发布源码的提交信息必须包含 `[skip ci]`，以保留仓库工作流文件但不触发 GitHub Actions 的重复构建。需要 GitHub 托管验证时，才提交不带该标记的常规 PR 或 `source-upload` 更新；完整边界见 [工作流说明](.github/WORKFLOWS.md)。
+
 ## 工程结构
 
 ```text
