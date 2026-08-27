@@ -156,6 +156,10 @@ class LocalConversationViewModel(application: Application) : AndroidViewModel(ap
         }
     }
 
+    fun showStatus(message: String) {
+        _status.value = message
+    }
+
     fun clear() {
         viewModelScope.launch {
             dao.clearChatMessages()

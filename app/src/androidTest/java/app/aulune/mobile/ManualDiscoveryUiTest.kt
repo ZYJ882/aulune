@@ -33,6 +33,58 @@ class ManualDiscoveryUiTest {
     }
 
     @Test
+    fun profileGuidedExploreRequiresExplicitClickAndReadyPlan() {
+        var clicked = false
+        val readyPlan = ProfileGuidedExplorePlan(
+            focusThemes = listOf("技术 · AI"),
+            platforms = listOf(ContentPlatform.BILIBILI),
+            summary = "点击执行前不会联网。",
+        )
+        composeRule.setContent {
+            MaterialTheme {
+                ProfileGuidedExploreCard(
+                    plan = readyPlan,
+                    isRunning = false,
+                    onRun = { clicked = true },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("按我的画像探索").assertIsDisplayed()
+        composeRule.onNodeWithText("只会导入计划列出的公开来源；不会后台执行，不读取账号 Cookie。").assertIsDisplayed()
+        composeRule.onNodeWithText("确认并按画像探索").performClick()
+        assertTrue(clicked)
+    }
+
+    @Test
+    fun profileGuidedExploreIsDisabledWithoutPlanOrWhileRunning() {
+        composeRule.setContent {
+            MaterialTheme {
+                ProfileGuidedExploreCard(
+                    plan = ProfileGuidedExplorePlan(),
+                    isRunning = false,
+                    onRun = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText("确认并按画像探索").assertIsNotEnabled()
+
+        composeRule.setContent {
+            MaterialTheme {
+                ProfileGuidedExploreCard(
+                    plan = ProfileGuidedExplorePlan(
+                        focusThemes = listOf("技术 · AI"),
+                        platforms = listOf(ContentPlatform.BILIBILI),
+                    ),
+                    isRunning = true,
+                    onRun = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText("正在按画像探索…").assertIsNotEnabled()
+    }
+
+    @Test
     fun otherPublicSourcesButtonIsDisabledWhileTaskIsRunning() {
         composeRule.setContent {
             MaterialTheme {

@@ -243,7 +243,7 @@ private fun AuluneApp(
                     AppTab.Focus -> FocusScreen(localFeedViewModel)
                     AppTab.Library -> LibraryScreen(libraryViewModel)
                     AppTab.Compass -> CompassScreen(localFeedViewModel)
-                    AppTab.Talk -> TalkScreen(store, llmClient, conversationViewModel)
+                    AppTab.Talk -> TalkScreen(store, llmClient, conversationViewModel, localFeedViewModel)
                     AppTab.Models -> SettingsScreen(
                         store = store,
                         localFeedViewModel = localFeedViewModel,
@@ -379,6 +379,13 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                     }
                 }
             }
+        }
+        item {
+            ProfileGuidedExploreCard(
+                plan = localState.profileExplorePlan,
+                isRunning = localState.backgroundDiscovery.isRunning,
+                onRun = viewModel::runProfileGuidedDiscovery,
+            )
         }
         item {
             BackgroundDiscoveryCard(
@@ -667,6 +674,91 @@ private fun SourceBadge(channel: SourceChannel) {
 }
 
 @Composable
+internal fun ProfileGuidedExploreCard(
+    plan: ProfileGuidedExplorePlan,
+    isRunning: Boolean,
+    onRun: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("按我的画像探索", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                    Text("先展示本机计划，再由你点击联网", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                }
+                Surface(color = colors.primaryContainer, shape = RoundedCornerShape(10.dp)) {
+                    Text("本机计划", style = MaterialTheme.typography.labelSmall, color = colors.onPrimaryContainer, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+            }
+            Text(plan.summary, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 18.sp)
+            if (plan.focusThemes.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    plan.focusThemes.forEach { theme -> AssistChip(onClick = {}, label = { Text(theme, style = MaterialTheme.typography.labelSmall) }) }
+                }
+            }
+            Button(
+                onClick = onRun,
+                enabled = plan.isReady && !isRunning,
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+            ) {
+                Icon(Icons.Outlined.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (isRunning) "正在按画像探索…" else "确认并按画像探索", style = MaterialTheme.typography.labelLarge)
+            }
+            Text("只会导入计划列出的公开来源；不会后台执行，不读取账号 Cookie。", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun InterestHypothesisCard(
+    hypotheses: List<InterestHypothesisUi>,
+    onDecision: (String, Boolean) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("兴趣候选", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+            }
+            val pending = hypotheses.filter { it.status == InterestHypothesisStatus.Pending }
+            if (pending.isEmpty()) {
+                Text("尚无待确认候选。持续使用信息流后，或在对话页主动提取主题，系统会生成可审阅的探索方向。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 18.sp)
+            } else {
+                pending.take(3).forEach { hypothesis ->
+                    Surface(color = colors.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(hypothesis.candidateTheme, style = MaterialTheme.typography.labelLarge, color = colors.onSurface)
+                            Text("${hypothesis.originLabel} · 基于 ${hypothesis.evidenceCount} 条证据", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                            Text(hypothesis.reason, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 16.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                TextButton(onClick = { onDecision(hypothesis.id, true) }) { Text("确认兴趣", style = MaterialTheme.typography.labelSmall) }
+                                TextButton(onClick = { onDecision(hypothesis.id, false) }) { Text("不感兴趣", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant) }
+                            }
+                        }
+                    }
+                }
+            }
+            Text("候选不会自动写入画像，也不会自动发起内容探索。", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 internal fun BackgroundDiscoveryCard(
     state: BackgroundDiscoveryUiState,
     onRunNow: () -> Unit,
@@ -950,6 +1042,12 @@ private fun CompassScreen(viewModel: LocalFeedViewModel) {
                 }
             }
         }
+        item {
+            InterestHypothesisCard(
+                hypotheses = localState.hypotheses,
+                onDecision = viewModel::decideInterestHypothesis,
+            )
+        }
         // 行为层
         item {
             Card(
@@ -1007,6 +1105,7 @@ private fun TalkScreen(
     store: AuluneStore,
     client: LlmClient,
     conversationViewModel: LocalConversationViewModel,
+    localFeedViewModel: LocalFeedViewModel,
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -1040,6 +1139,21 @@ private fun TalkScreen(
             }
         }
         ProviderBar(provider = store.selectedProvider, configured = activeSettings.apiKey.isNotBlank(), status = status)
+        if (messages.any { it.fromUser }) {
+            TextButton(
+                onClick = {
+                    localFeedViewModel.extractDialogueInterestHypotheses(
+                        messages.filter { it.fromUser }.map { it.text }
+                    ) { message -> conversationViewModel.showStatus(message) }
+                    haptic.confirm()
+                },
+                modifier = Modifier.padding(horizontal = 16.dp),
+            ) {
+                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("从我的对话提取兴趣候选", style = MaterialTheme.typography.labelMedium)
+            }
+        }
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),

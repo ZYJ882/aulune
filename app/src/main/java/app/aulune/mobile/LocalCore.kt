@@ -144,6 +144,21 @@ interface LocalCoreDao {
     @Query("SELECT * FROM local_profile ORDER BY layer ASC")
     suspend fun profilesNow(): List<LocalProfileEntity>
 
+    @Query("SELECT * FROM local_interest_hypothesis ORDER BY createdAt DESC")
+    fun observeInterestHypotheses(): Flow<List<InterestHypothesisEntity>>
+
+    @Query("SELECT * FROM local_interest_hypothesis ORDER BY createdAt DESC")
+    suspend fun interestHypothesesNow(): List<InterestHypothesisEntity>
+
+    @Query("SELECT * FROM local_interest_hypothesis WHERE id = :id LIMIT 1")
+    suspend fun interestHypothesis(id: String): InterestHypothesisEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertInterestHypotheses(items: List<InterestHypothesisEntity>)
+
+    @Query("DELETE FROM local_interest_hypothesis")
+    suspend fun clearInterestHypotheses()
+
     @Query("SELECT * FROM local_chat_message ORDER BY createdAt ASC, id ASC")
     fun observeChatMessages(): Flow<List<LocalChatMessageEntity>>
 
@@ -283,10 +298,11 @@ interface LocalCoreDao {
         LocalProfileEntity::class,
         LocalPreferenceEntity::class,
         LocalChatMessageEntity::class,
+        InterestHypothesisEntity::class,
         DiscoveryTaskEntity::class,
         SourceAvailabilityEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AuluneLocalDatabase : RoomDatabase() {
@@ -345,11 +361,19 @@ abstract class AuluneLocalDatabase : RoomDatabase() {
             }
         }
 
+        private val Migration7To8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_interest_hypothesis (id TEXT NOT NULL, candidateTheme TEXT NOT NULL, sourceTheme TEXT NOT NULL, origin TEXT NOT NULL, reason TEXT NOT NULL, evidenceCount INTEGER NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, expiresAt INTEGER NOT NULL, decidedAt INTEGER NOT NULL, PRIMARY KEY(id))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_interest_hypothesis_status ON local_interest_hypothesis(status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_interest_hypothesis_createdAt ON local_interest_hypothesis(createdAt)")
+            }
+        }
+
         fun create(context: Context): AuluneLocalDatabase = Room.databaseBuilder(
             context.applicationContext,
             AuluneLocalDatabase::class.java,
             "aulune-local.db"
-        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7).build()
+        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8).build()
     }
 }
 
@@ -396,6 +420,8 @@ data class LocalFeedUiState(
     val feedbackCount: Int = 0,
     val intent: SessionIntent = SessionIntent.Balanced,
     val profiles: List<LocalProfileUi> = emptyList(),
+    val hypotheses: List<InterestHypothesisUi> = emptyList(),
+    val profileExplorePlan: ProfileGuidedExplorePlan = ProfileGuidedExplorePlan(),
     val cloudAi: CloudAiUiState = CloudAiUiState(),
     val explanation: String = "推荐、收藏、反馈和行为事件仅保存在这台手机。",
     val isPlatformSyncing: Boolean = false,
@@ -424,7 +450,8 @@ internal data class RankingSnapshot(
     val interests: List<InterestEntity>,
     val events: List<BehaviorEventEntity>,
     val feedback: List<LocalFeedbackEntity>,
-    val profiles: List<LocalProfileEntity> = emptyList()
+    val profiles: List<LocalProfileEntity> = emptyList(),
+    val hypotheses: List<InterestHypothesisEntity> = emptyList()
 )
 
 internal class LocalCoreRepository(private val dao: LocalCoreDao) {
@@ -446,11 +473,38 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
     }
 
     suspend fun runManualDiscoveryTask(taskId: String) {
+        runDiscoveryTask(
+            taskId = taskId,
+            platforms = ContentPlatform.entries.filterNot { it == ContentPlatform.BILIBILI },
+            runningDetail = "正在探索其他公开来源…",
+            completedPrefix = "",
+        )
+    }
+
+    suspend fun runProfileGuidedDiscoveryTask(taskId: String, plan: ProfileGuidedExplorePlan) {
+        runDiscoveryTask(
+            taskId = taskId,
+            platforms = plan.platforms,
+            runningDetail = "正在按本机画像探索 ${plan.platforms.joinToString("、") { it.shortLabel }}…",
+            completedPrefix = plan.summary + " ",
+        )
+    }
+
+    private suspend fun runDiscoveryTask(
+        taskId: String,
+        platforms: List<ContentPlatform>,
+        runningDetail: String,
+        completedPrefix: String,
+    ) {
         val existing = dao.discoveryTask(taskId) ?: return
+        if (platforms.isEmpty()) {
+            dao.upsertDiscoveryTask(existing.copy(status = DiscoveryTaskStatus.Failed.name, finishedAt = System.currentTimeMillis(), detail = "当前画像尚不足以生成可执行的来源计划。"))
+            return
+        }
         val startedAt = System.currentTimeMillis()
-        dao.upsertDiscoveryTask(existing.copy(status = DiscoveryTaskStatus.Running.name, startedAt = startedAt, finishedAt = 0L, detail = "正在探测公开来源…"))
+        dao.upsertDiscoveryTask(existing.copy(status = DiscoveryTaskStatus.Running.name, startedAt = startedAt, finishedAt = 0L, detail = runningDetail))
         try {
-            val result = discoverPublicSources()
+            val result = discoverPublicSources(platforms)
             val status = DiscoveryTaskClassifier.status(result)
             dao.upsertDiscoveryTask(
                 existing.copy(
@@ -460,7 +514,7 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
                     discoveredCount = result.discoveredCount,
                     checkedSources = result.outcomes.size,
                     availableSources = result.availableSources,
-                    detail = DiscoveryTaskClassifier.detail(result)
+                    detail = completedPrefix + DiscoveryTaskClassifier.detail(result)
                 )
             )
         } catch (error: Throwable) {
@@ -479,8 +533,8 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         ) { content, savedCount, interests, events, feedback ->
             RankingSnapshot(content, savedCount, interests, events, feedback)
         }
-        return combine(core, dao.observeProfiles()) { snapshot, profiles ->
-            snapshot.copy(profiles = profiles)
+        return combine(core, dao.observeProfiles(), dao.observeInterestHypotheses()) { snapshot, profiles, hypotheses ->
+            snapshot.copy(profiles = profiles, hypotheses = hypotheses)
         }
     }
 
@@ -593,10 +647,10 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
     }
 
     /** 仅在用户手动触发时探测其他公开来源；B 站热门由专用入口导入，避免重复。 */
-    suspend fun discoverPublicSources(): DiscoveryRunResult {
-        val outcomes = ContentPlatform.entries
-            .filterNot { it == ContentPlatform.BILIBILI }
-            .map { platform ->
+    suspend fun discoverPublicSources(
+        platforms: List<ContentPlatform> = ContentPlatform.entries.filterNot { it == ContentPlatform.BILIBILI }
+    ): DiscoveryRunResult {
+        val outcomes = platforms.distinct().map { platform ->
             val attempt = PlatformRetryPolicy.run { importPlatformPublic(platform) }
             SourceProbeOutcome(
                 platform = platform,
@@ -853,6 +907,43 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         rebuildProfiles(force = dao.eventCount() % 5 == 0)
     }
 
+    suspend fun refreshInterestHypotheses() {
+        val now = System.currentTimeMillis()
+        val existing = dao.interestHypothesesNow()
+        val expired = ProfileGuidedExplorationPolicy.expire(existing, now)
+        if (expired != existing) dao.upsertInterestHypotheses(expired)
+        val proposals = ProfileGuidedExplorationPolicy.propose(dao.interestsNow(), expired, now)
+        if (proposals.isNotEmpty()) dao.upsertInterestHypotheses(proposals)
+    }
+
+    suspend fun proposeDialogueHypotheses(messages: List<String>): Int {
+        val now = System.currentTimeMillis()
+        val existing = dao.interestHypothesesNow()
+        val proposals = ProfileGuidedExplorationPolicy.proposeFromDialogue(messages, existing, now)
+        if (proposals.isNotEmpty()) dao.upsertInterestHypotheses(proposals)
+        return proposals.size
+    }
+
+    suspend fun decideInterestHypothesis(id: String, confirmed: Boolean) {
+        val current = dao.interestHypothesis(id) ?: return
+        if (current.status != InterestHypothesisStatus.Pending.name) return
+        val now = System.currentTimeMillis()
+        val status = if (confirmed) InterestHypothesisStatus.Confirmed else InterestHypothesisStatus.Rejected
+        dao.upsertInterestHypotheses(listOf(current.copy(status = status.name, decidedAt = now)))
+        if (confirmed) {
+            val interest = dao.interest(current.candidateTheme)
+            dao.upsertInterest(
+                LocalAdaptiveCore.updateInterest(
+                    current = interest,
+                    theme = current.candidateTheme,
+                    delta = 0.8,
+                    now = now
+                )
+            )
+        }
+        rebuildProfiles(force = true)
+    }
+
     private suspend fun rebuildProfiles(force: Boolean) {
         if (!force && dao.eventCount() % 5 != 0) return
         val intent = loadIntent()
@@ -865,6 +956,7 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
             now = System.currentTimeMillis()
         )
         dao.upsertProfiles(profiles)
+        refreshInterestHypotheses()
     }
 }
 
@@ -933,6 +1025,8 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             feedbackCount = snapshot.feedback.size,
             intent = intent,
             profiles = snapshot.profiles.map { it.toLocalProfileUi() },
+            hypotheses = snapshot.hypotheses.map { it.toUi() },
+            profileExplorePlan = ProfileGuidedExplorationPolicy.plan(snapshot.interests, snapshot.hypotheses, intent),
             cloudAi = cloud,
             explanation = when {
                 top == null -> "从打开、喜欢、保存或不感兴趣开始，本机画像会在这台手机上逐步形成。"
@@ -976,6 +1070,37 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             repository.runManualDiscoveryTask(taskId)
             manualDiscoveryRunning.value = false
             backgroundDiscoveryNotice.value = "仅在你点击“探索其他公开来源”后执行；不会在后台自动联网。"
+        }
+    }
+
+    fun runProfileGuidedDiscovery() {
+        if (manualDiscoveryRunning.value) return
+        val plan = uiState.value.profileExplorePlan
+        if (!plan.isReady) {
+            backgroundDiscoveryNotice.value = "当前画像尚未形成可执行计划；先通过打开、保存、反馈或确认兴趣候选积累本机证据。"
+            return
+        }
+        viewModelScope.launch {
+            manualDiscoveryRunning.value = true
+            val taskId = repository.queueDiscoveryTask(DiscoveryTaskKind.ProfileGuided)
+            backgroundDiscoveryNotice.value = "正在按本机画像探索 ${plan.platforms.joinToString("、") { it.shortLabel }}；只在这次点击后联网。"
+            repository.runProfileGuidedDiscoveryTask(taskId, plan)
+            manualDiscoveryRunning.value = false
+            backgroundDiscoveryNotice.value = "本轮按画像探索已结束；不会在后台自动联网。"
+        }
+    }
+
+    fun decideInterestHypothesis(id: String, confirmed: Boolean) {
+        viewModelScope.launch { repository.decideInterestHypothesis(id, confirmed) }
+    }
+
+    fun extractDialogueInterestHypotheses(messages: List<String>, onFinished: (String) -> Unit) {
+        viewModelScope.launch {
+            val count = repository.proposeDialogueHypotheses(messages)
+            onFinished(
+                if (count > 0) "已从你主动选择的对话中提取 $count 个兴趣候选；请到“本机画像”确认或拒绝。"
+                else "未发现新的主题候选；对话原文仍只保留在本机。"
+            )
         }
     }
 

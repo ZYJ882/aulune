@@ -33,6 +33,16 @@ object RuleTopicClassifier {
         Rule("娱乐 · 影视游戏", "娱乐", setOf("游戏", "动画", "电影", "影视", "番剧", "音乐现场", "电竞", "漫画"))
     )
 
+    fun classifyText(text: String): List<String> {
+        val normalized = text.lowercase(Locale.ROOT)
+        return rules
+            .map { rule -> rule to rule.words.count { word -> normalized.contains(word) } }
+            .filter { (_, score) -> score > 0 }
+            .sortedByDescending { (_, score) -> score }
+            .map { (rule, _) -> rule.canonicalTheme }
+            .distinct()
+    }
+
     fun canonicalize(content: LocalContentEntity): LocalContentEntity {
         if (content.analysisSource == "cloud" && content.theme.isNotBlank() && content.topicGroup.isNotBlank()) {
             return content.copy(

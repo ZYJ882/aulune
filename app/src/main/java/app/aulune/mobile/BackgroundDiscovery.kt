@@ -5,7 +5,8 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 enum class DiscoveryTaskKind(val label: String) {
-    Manual("手动探测")
+    Manual("手动探测"),
+    ProfileGuided("按画像探索")
 }
 
 enum class DiscoveryTaskStatus(val label: String) {
