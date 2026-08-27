@@ -201,6 +201,18 @@ class AuluneStore(context: Context) {
         updateProviderSettings(provider, settings, updateStatus = true)
     }
 
+    /** 清除指定服务商的本机配置，不影响其他已保存的服务商。 */
+    fun clearProviderSettings(provider: AiProvider) {
+        providerSettings.remove(provider)
+        if (selectedProvider == provider) {
+            selectedProvider = providerSettings.keys.firstOrNull() ?: AiProvider.OpenAI
+        }
+        aiStatus = "已清除 ${provider.displayName} 的本机配置"
+        if (!persist()) {
+            aiStatus = "本机配置清除失败，请检查设备存储后重试。"
+        }
+    }
+
     /**
      * 保存用户在模型工作台输入的草稿，不会启用云端调用。
      * 这让“获取模型列表”后的关闭或进程重建不再丢失 Key、地址和模型名称。

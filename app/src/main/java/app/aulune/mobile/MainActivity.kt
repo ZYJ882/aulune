@@ -186,6 +186,9 @@ private fun AuluneApp(
     val libraryViewModel: LocalLibraryViewModel = viewModel()
     val conversationViewModel: LocalConversationViewModel = viewModel()
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
+    val navigateTo: (AppTab) -> Unit = { destination ->
+        tabIndex = AppTab.entries.indexOf(destination)
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -197,7 +200,7 @@ private fun AuluneApp(
                 AppTab.entries.forEachIndexed { index, tab ->
                     NavigationBarItem(
                         selected = tabIndex == index,
-                        onClick = { tabIndex = index },
+                        onClick = { navigateTo(tab) },
                         icon = {
                             AnimatedContent(
                                 targetState = tabIndex == index,
@@ -243,9 +246,21 @@ private fun AuluneApp(
             ) { index ->
                 when (AppTab.entries[index]) {
                     AppTab.Focus -> FocusScreen(localFeedViewModel)
-                    AppTab.Library -> LibraryScreen(libraryViewModel)
-                    AppTab.Compass -> CompassScreen(localFeedViewModel)
-                    AppTab.Talk -> TalkScreen(store, llmClient, conversationViewModel, localFeedViewModel)
+                    AppTab.Library -> LibraryScreen(
+                        viewModel = libraryViewModel,
+                        onNavigateToFocus = { navigateTo(AppTab.Focus) },
+                    )
+                    AppTab.Compass -> CompassScreen(
+                        viewModel = localFeedViewModel,
+                        onNavigateToSettings = { navigateTo(AppTab.Models) },
+                    )
+                    AppTab.Talk -> TalkScreen(
+                        store = store,
+                        client = llmClient,
+                        conversationViewModel = conversationViewModel,
+                        localFeedViewModel = localFeedViewModel,
+                        onNavigateToSettings = { navigateTo(AppTab.Models) },
+                    )
                     AppTab.Models -> SettingsScreen(
                         store = store,
                         localFeedViewModel = localFeedViewModel,
@@ -499,7 +514,7 @@ private fun FocusPromptCard() {
                 )
             }
             Spacer(Modifier.height(10.dp))
-            Text("左右滑动切换问题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f))
+            Text("点击卡片切换问题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f))
         }
     }
 }
@@ -872,7 +887,10 @@ private fun EmptyStateCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LibraryScreen(viewModel: LocalLibraryViewModel) {
+private fun LibraryScreen(
+    viewModel: LocalLibraryViewModel,
+    onNavigateToFocus: () -> Unit,
+) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
@@ -916,7 +934,7 @@ private fun LibraryScreen(viewModel: LocalLibraryViewModel) {
                     title = state.emptyMessage.ifBlank { "这里还没有内容" },
                     description = "去首页浏览内容，点击书签图标保存到内容库。也可以导入 B 站观看历史。",
                     actionLabel = "去首页",
-                    onAction = { },
+                    onAction = onNavigateToFocus,
                 )
             }
         } else {
@@ -954,7 +972,10 @@ private fun LibraryScreen(viewModel: LocalLibraryViewModel) {
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-private fun CompassScreen(viewModel: LocalFeedViewModel) {
+private fun CompassScreen(
+    viewModel: LocalFeedViewModel,
+    onNavigateToSettings: () -> Unit,
+) {
     val localState by viewModel.uiState.collectAsState()
 
     LazyColumn(
@@ -1064,8 +1085,11 @@ private fun CompassScreen(viewModel: LocalFeedViewModel) {
                         BehaviorStat("反馈", localState.feedbackCount.toString())
                         BehaviorStat("内容", localState.items.size.toString())
                     }
+                    val canUseCloudAi = localState.cloudAi.enabled && localState.cloudAi.hasKey
                     Button(
-                        onClick = { viewModel.buildCloudProfileCandidate() },
+                        onClick = {
+                            if (canUseCloudAi) viewModel.buildCloudProfileCandidate() else onNavigateToSettings()
+                        },
                         enabled = !localState.cloudAi.isWorking,
                         shape = RoundedCornerShape(28.dp),
                         modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -1073,10 +1097,17 @@ private fun CompassScreen(viewModel: LocalFeedViewModel) {
                         if (localState.cloudAi.isWorking) {
                             CircularProgressIndicator(Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                         } else {
-                            Text("用 ${localState.cloudAi.provider.displayName} 更新画像候选", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                if (canUseCloudAi) "用 ${localState.cloudAi.provider.displayName} 更新画像候选" else "配置云端 AI 后更新画像",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
                         }
                     }
-                    Text(localState.cloudAi.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (canUseCloudAi) localState.cloudAi.status else "需先在“设置”中保存 API Key；点击上方按钮可直接前往配置。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1104,6 +1135,7 @@ private fun TalkScreen(
     client: LlmClient,
     conversationViewModel: LocalConversationViewModel,
     localFeedViewModel: LocalFeedViewModel,
+    onNavigateToSettings: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -1136,7 +1168,12 @@ private fun TalkScreen(
                 TextButton(onClick = { conversationViewModel.clear() }) { Text("清空", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
-        ProviderBar(provider = store.selectedProvider, configured = activeSettings.apiKey.isNotBlank(), status = status)
+        ProviderBar(
+            provider = store.selectedProvider,
+            configured = activeSettings.apiKey.isNotBlank(),
+            status = status,
+            onConfigure = onNavigateToSettings,
+        )
         if (messages.any { it.fromUser }) {
             TextButton(
                 onClick = {
@@ -1209,18 +1246,30 @@ private fun TalkScreen(
 }
 
 @Composable
-private fun ProviderBar(provider: AiProvider, configured: Boolean, status: String) {
+private fun ProviderBar(
+    provider: AiProvider,
+    configured: Boolean,
+    status: String,
+    onConfigure: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth(),
+        modifier = Modifier
+            .padding(horizontal = 24.dp)
+            .fillMaxWidth()
+            .clickable { onConfigure() },
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(provider.displayName, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                Text(status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                Text(
+                    if (configured) status else "尚未配置模型 · 点击此处前往设置",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                )
             }
         }
     }
@@ -1468,7 +1517,9 @@ private fun ModelConfigCard(
     var isLoadingModels by rememberSaveable(provider) { mutableStateOf(false) }
     var remoteModels by rememberSaveable(provider) { mutableStateOf(emptyList<String>()) }
     var showModelPicker by rememberSaveable(provider) { mutableStateOf(false) }
+    var showClearConfigConfirm by rememberSaveable(provider) { mutableStateOf(false) }
     val configured = store.providerSettings.filterValues { it.apiKey.isNotBlank() }.keys
+    val canEnable = apiKey.isNotBlank()
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1525,7 +1576,11 @@ private fun ModelConfigCard(
             shape = RoundedCornerShape(28.dp),
         )
         Text(
-            "输入内容会自动加密保存在本机；点击“保存并启用”后才会启用云端 API。",
+            if (canEnable) {
+                "输入内容会自动加密保存在本机；点击“保存并启用”后才会启用云端 API。"
+            } else {
+                "请先填写 API Key。当前草稿会加密保存在本机，但不会启用云端 API。"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1593,6 +1648,7 @@ private fun ModelConfigCard(
                 localFeedViewModel.saveCloudAiConfig(provider = provider, apiKey = saved.apiKey, model = saved.effectiveModel(provider), baseUrl = saved.effectiveBaseUrl(provider), protocol = saved.effectiveProtocol(provider), enable = true)
                 modelStatus = "已保存 ${provider.displayName} 配置。"
             },
+            enabled = canEnable,
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier.fillMaxWidth().height(56.dp),
         ) {
@@ -1600,7 +1656,33 @@ private fun ModelConfigCard(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { localFeedViewModel.disableCloudAi() }) { Text("仅使用本机规则", style = MaterialTheme.typography.labelSmall) }
-            TextButton(onClick = { localFeedViewModel.clearCloudAiKey() }) { Text("清除 Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            TextButton(onClick = { showClearConfigConfirm = true }) {
+                Text("清除当前配置", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (showClearConfigConfirm) {
+            AlertDialog(
+                onDismissRequest = { showClearConfigConfirm = false },
+                title = { Text("清除 ${provider.displayName} 配置？") },
+                text = { Text("将从本机加密存储中删除当前服务商的 API Key、模型和接口地址。若它正在用于云端增强，也会同时停止该增强。") },
+                dismissButton = {
+                    TextButton(onClick = { showClearConfigConfirm = false }) { Text("取消") }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            store.clearProviderSettings(provider)
+                            localFeedViewModel.clearCloudAiConfig(provider)
+                            apiKey = ""
+                            model = provider.defaultModel
+                            baseUrl = provider.defaultBaseUrl
+                            remoteModels = emptyList()
+                            modelStatus = "已清除 ${provider.displayName} 的本机配置。"
+                            showClearConfigConfirm = false
+                        },
+                    ) { Text("清除") }
+                },
+            )
         }
     }
 }
