@@ -76,6 +76,7 @@ private fun JsonObject.toLocalContent(): LocalContentEntity? {
         url = if (bvid.isNotBlank()) "https://www.bilibili.com/video/$bvid" else "https://www.bilibili.com/video/av$aid",
         gradientStart = gradientStartFor(theme),
         gradientEnd = gradientEndFor(theme),
+        thumbnailUrl = ExternalUrlPolicy.normalizedHttpUrlOrEmpty(text("pic").ifBlank { text("cover") }),
         createdAt = now,
         updatedAt = now
     )

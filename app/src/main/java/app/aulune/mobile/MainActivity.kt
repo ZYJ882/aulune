@@ -114,7 +114,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -307,7 +310,7 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("本机信息流", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text("内容来源", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -325,6 +328,11 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                             )
                         }
                     }
+                    Text(
+                        "B 站热门无需登录，适合快速开始；不会读取账号 Cookie。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Button(
                         onClick = { viewModel.importBilibiliPublicContent(); haptic.confirm() },
                         enabled = !localState.isBilibiliImporting,
@@ -337,34 +345,24 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                         } else {
                             Icon(Icons.Outlined.Explore, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("导入 B 站公开内容", style = MaterialTheme.typography.labelLarge)
+                            Text("导入 B 站热门", style = MaterialTheme.typography.labelLarge)
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { viewModel.importAllPlatformsPublic(); haptic.click() },
-                            enabled = !localState.isPlatformSyncing,
-                            shape = RoundedCornerShape(28.dp),
-                            modifier = Modifier.weight(1f).height(48.dp),
-                        ) {
-                            if (localState.isPlatformSyncing) {
-                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Outlined.Public, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("全平台", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                        OutlinedButton(
-                            onClick = { context.startActivity(Intent(context, MultiPlatformLoginActivity::class.java)); haptic.click() },
-                            shape = RoundedCornerShape(28.dp),
-                            modifier = Modifier.weight(1f).height(48.dp),
-                        ) {
-                            Icon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("账号", style = MaterialTheme.typography.labelMedium)
-                        }
+                    OutlinedButton(
+                        onClick = { context.startActivity(Intent(context, MultiPlatformLoginActivity::class.java)); haptic.click() },
+                        shape = RoundedCornerShape(28.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    ) {
+                        Icon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("管理与同步我的账号", style = MaterialTheme.typography.labelMedium)
                     }
+                    Text(
+                        "账号同步由你手动发起，可将收藏、观看历史和稍后再看作为本机推荐证据。其他公开来源请使用下方“探索其他公开来源”。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 16.sp,
+                    )
                     if (localState.bilibiliStatus.isNotBlank()) {
                         Text(localState.bilibiliStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -391,8 +389,18 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
         item { FocusPromptCard() }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("今日输入", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-                Spacer(Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    Text("为你推荐", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        localState.explanation,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Text("${localState.items.size} 条", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -513,20 +521,38 @@ private fun CuratedItemCard(
             .clickable { onOpen() },
     ) {
         Row(Modifier.padding(14.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(width = 96.dp, height = 120.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Brush.linearGradient(listOf(start, end))),
-                contentAlignment = Alignment.BottomStart,
-            ) {
-                Text(
-                    item.channel.label,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(10.dp),
-                )
+            if (item.thumbnailUrl.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 96.dp, height = 120.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Brush.linearGradient(listOf(start, end))),
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(item.thumbnailUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "${item.title} 的缩略图",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.42f),
+                        shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    ) {
+                        Text(
+                            item.channel.label,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            } else {
+                SourceThumbnailFallback(channel = item.channel, start = start, end = end)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -598,6 +624,33 @@ private fun CuratedItemCard(
 }
 
 @Composable
+private fun SourceThumbnailFallback(channel: SourceChannel, start: Color, end: Color) {
+    Box(
+        modifier = Modifier
+            .size(width = 96.dp, height = 120.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Brush.linearGradient(listOf(start, end))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(10.dp)) {
+            Icon(Icons.Outlined.Public, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "暂无封面",
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                channel.label,
+                color = Color.White.copy(alpha = 0.82f),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Composable
 private fun SourceBadge(channel: SourceChannel) {
     Surface(
         color = Color(channel.accent).copy(alpha = 0.12f),
@@ -629,8 +682,8 @@ internal fun BackgroundDiscoveryCard(
                 Icon(Icons.Outlined.Explore, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("手动来源探测", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
-                    Text("仅在你点击后联网 · 仅探测公开来源", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                    Text("其他公开来源", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                    Text("仅在你点击后联网 · B 站热门由上方单独导入", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
                 }
                 Surface(color = colors.secondaryContainer, shape = RoundedCornerShape(10.dp)) {
                     Text(
@@ -651,11 +704,11 @@ internal fun BackgroundDiscoveryCard(
                 if (state.isRunning) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = colors.onPrimary, strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("正在探测公开来源…", style = MaterialTheme.typography.labelLarge)
+                    Text("正在探索其他公开来源…", style = MaterialTheme.typography.labelLarge)
                 } else {
                     Icon(Icons.Outlined.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("立即探测公开来源", style = MaterialTheme.typography.labelLarge)
+                    Text("探索其他公开来源", style = MaterialTheme.typography.labelLarge)
                 }
             }
             if (state.sources.isNotEmpty() || state.recentTasks.isNotEmpty()) {

@@ -133,6 +133,7 @@ private fun JsonObject.toLocalContent(sourceLabel: String): LocalContentEntity? 
         url = "https://www.bilibili.com/video/$bvid",
         gradientStart = 0xFF263B78,
         gradientEnd = 0xFF5C8FE8,
+        thumbnailUrl = ExternalUrlPolicy.normalizedHttpUrlOrEmpty(text("cover").ifBlank { text("pic") }),
         createdAt = now,
         updatedAt = now,
         saved = sourceLabel.startsWith("收藏夹")
@@ -158,6 +159,7 @@ private fun JsonObject.toHistoryContent(): LocalContentEntity? {
         url = "https://www.bilibili.com/video/$bvid",
         gradientStart = 0xFF5A263D,
         gradientEnd = 0xFFE56884,
+        thumbnailUrl = ExternalUrlPolicy.normalizedHttpUrlOrEmpty(text("cover").ifBlank { text("pic") }),
         createdAt = now,
         updatedAt = now
     )
@@ -181,6 +183,7 @@ private fun JsonObject.toToViewContent(): LocalContentEntity? {
         url = "https://www.bilibili.com/video/$bvid",
         gradientStart = 0xFF5B1F55,
         gradientEnd = 0xFFA64D96,
+        thumbnailUrl = ExternalUrlPolicy.normalizedHttpUrlOrEmpty(text("cover").ifBlank { text("pic") }),
         createdAt = now,
         updatedAt = now,
         saved = true

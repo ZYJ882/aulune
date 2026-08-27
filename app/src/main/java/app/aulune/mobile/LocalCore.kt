@@ -49,7 +49,9 @@ data class LocalContentEntity(
     val seriesKey: String = "",
     val topicGroup: String = "",
     val aiInsight: String = "",
-    val analysisSource: String = "rule"
+    val analysisSource: String = "rule",
+    /** 来源响应提供的真实缩略图地址；为空时 UI 明确使用本机视觉回退。 */
+    val thumbnailUrl: String = ""
 )
 
 @Entity(tableName = "behavior_event")
@@ -284,7 +286,7 @@ interface LocalCoreDao {
         DiscoveryTaskEntity::class,
         SourceAvailabilityEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AuluneLocalDatabase : RoomDatabase() {
@@ -337,11 +339,17 @@ abstract class AuluneLocalDatabase : RoomDatabase() {
             }
         }
 
+        private val Migration6To7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE local_content ADD COLUMN thumbnailUrl TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun create(context: Context): AuluneLocalDatabase = Room.databaseBuilder(
             context.applicationContext,
             AuluneLocalDatabase::class.java,
             "aulune-local.db"
-        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6).build()
+        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7).build()
     }
 }
 
@@ -584,9 +592,11 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         return importContent(normalized)
     }
 
-    /** 后台或手动发现：按现有错误分类和最多 3 次退避规则探测每个公开来源。 */
+    /** 仅在用户手动触发时探测其他公开来源；B 站热门由专用入口导入，避免重复。 */
     suspend fun discoverPublicSources(): DiscoveryRunResult {
-        val outcomes = ContentPlatform.entries.map { platform ->
+        val outcomes = ContentPlatform.entries
+            .filterNot { it == ContentPlatform.BILIBILI }
+            .map { platform ->
             val attempt = PlatformRetryPolicy.run { importPlatformPublic(platform) }
             SourceProbeOutcome(
                 platform = platform,
@@ -600,10 +610,10 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         return DiscoveryRunResult(outcomes)
     }
 
-    /** 导入所有平台的公开内容 */
+    /** 导入除 B 站外的其他平台公开内容；B 站热门由专用入口导入。 */
     suspend fun importAllPlatformsPublic(): Map<ContentPlatform, Int> {
         val results = mutableMapOf<ContentPlatform, Int>()
-        ContentPlatform.entries.forEach { platform ->
+        ContentPlatform.entries.filterNot { it == ContentPlatform.BILIBILI }.forEach { platform ->
             runCatching {
                 results[platform] = importPlatformPublic(platform)
             }.onFailure {
@@ -962,10 +972,10 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             manualDiscoveryRunning.value = true
             val taskId = repository.queueDiscoveryTask(DiscoveryTaskKind.Manual)
-            backgroundDiscoveryNotice.value = "正在探测公开来源；本轮结束后会在本机保留任务和来源状态。"
+            backgroundDiscoveryNotice.value = "正在探索其他公开来源；本轮结束后会在本机保留任务和来源状态。"
             repository.runManualDiscoveryTask(taskId)
             manualDiscoveryRunning.value = false
-            backgroundDiscoveryNotice.value = "仅在你点击“立即探测公开来源”后执行；不会在后台自动联网。"
+            backgroundDiscoveryNotice.value = "仅在你点击“探索其他公开来源”后执行；不会在后台自动联网。"
         }
     }
 
@@ -1275,7 +1285,8 @@ private fun LocalContentEntity.toCuratedItem(
         sourceKey = sourceKey,
         authorKey = authorKey,
         seriesKey = seriesKey,
-        topicGroup = topicGroup
+        topicGroup = topicGroup,
+        thumbnailUrl = thumbnailUrl
     )
 }
 

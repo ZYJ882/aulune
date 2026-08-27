@@ -143,7 +143,9 @@ data class CuratedItem(
     val sourceKey: String = "",
     val authorKey: String = "",
     val seriesKey: String = "",
-    val topicGroup: String = ""
+    val topicGroup: String = "",
+    /** 仅保存来源响应提供的 HTTP(S) 缩略图地址；空值时 UI 使用本机渐变回退。 */
+    val thumbnailUrl: String = ""
 )
 
 data class ConversationMessage(

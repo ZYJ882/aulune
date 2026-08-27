@@ -60,6 +60,34 @@ class AdaptiveRankingTest {
     }
 
     @Test
+    fun positiveAuthorAndTopicGroupFeedbackPromoteMatchingCandidate() {
+        val candidate = content(author = "trusted-up")
+        val baseline = LocalAdaptiveCore.score(candidate, emptyList(), emptyList(), emptyList(), 0)
+        val feedback = listOf(
+            LocalFeedbackEntity("positive-author", candidate.contentKey, FeedbackType.Positive.name, FeedbackTarget.Author.name, candidate.authorKey, 10L),
+            LocalFeedbackEntity("positive-group", candidate.contentKey, FeedbackType.Positive.name, FeedbackTarget.TopicGroup.name, candidate.topicGroup, 10L),
+        )
+        val promoted = LocalAdaptiveCore.score(candidate, emptyList(), emptyList(), feedback, 0)
+        assertTrue(promoted > baseline)
+    }
+
+    @Test
+    fun negativeTopicGroupFeedbackDemotesMatchingCandidate() {
+        val candidate = content()
+        val baseline = LocalAdaptiveCore.score(candidate, emptyList(), emptyList(), emptyList(), 0)
+        val feedback = LocalFeedbackEntity(
+            id = "negative-group",
+            contentKey = candidate.contentKey,
+            feedbackType = FeedbackType.Negative.name,
+            targetType = FeedbackTarget.TopicGroup.name,
+            targetKey = candidate.topicGroup,
+            occurredAt = 10L,
+        )
+        val demoted = LocalAdaptiveCore.score(candidate, emptyList(), emptyList(), listOf(feedback), 0)
+        assertTrue(demoted < baseline)
+    }
+
+    @Test
     fun repeatedThemeEventsCauseFatiguePenalty() {
         val candidate = content()
         val interest = InterestEntity(

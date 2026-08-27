@@ -49,6 +49,7 @@ private fun makeEntity(
     readTime: String,
     theme: String,
     channel: SourceChannel = SourceChannel.Video,
+    thumbnailUrl: String = "",
 ): LocalContentEntity {
     val now = nowMillis()
     return LocalContentEntity(
@@ -62,9 +63,10 @@ private fun makeEntity(
         url = url,
         gradientStart = platformGradientStart(theme, platform),
         gradientEnd = platformGradientEnd(theme, platform),
+        thumbnailUrl = ExternalUrlPolicy.normalizedHttpUrlOrEmpty(thumbnailUrl),
         createdAt = now,
         updatedAt = now,
-        sourceKey = remoteId,
+        sourceKey = platform.name.lowercase(),
         authorKey = author,
     )
 }
@@ -216,6 +218,7 @@ class XiaohongshuPublicConnector(
             readTime = if (type == "video") "视频" else "笔记",
             theme = classifyTheme(title, noteCard.text("desc")),
             channel = if (type == "video") SourceChannel.Video else SourceChannel.Notes,
+            thumbnailUrl = cover,
         )
     }
 }
@@ -278,6 +281,7 @@ class ZhihuPublicConnector(
             readTime = if (type == "answer") "回答" else "问题",
             theme = classifyTheme(title, excerpt),
             channel = SourceChannel.Insight,
+            thumbnailUrl = target.text("thumbnail").ifBlank { target.text("image_url") },
         )
     }
 }
@@ -395,6 +399,7 @@ class YoutubePublicConnector(
                 readTime = "视频",
                 theme = classifyTheme(title, ""),
                 channel = SourceChannel.Video,
+                thumbnailUrl = root.text("thumbnail_url"),
             )
         }
     }
@@ -461,6 +466,10 @@ class RedditPublicConnector(
             readTime = "↑$ups",
             theme = classifyTheme(title, selftext, subreddit),
             channel = if (postHint == "image") SourceChannel.Notes else SourceChannel.Brief,
+            thumbnailUrl = this["preview"]?.jsonObject
+                ?.get("images")?.jsonArray?.firstOrNull()?.jsonObject
+                ?.get("source")?.jsonObject?.text("url")?.replace("&amp;", "").orEmpty()
+                .ifBlank { text("thumbnail") },
         )
     }
 }
@@ -580,6 +589,8 @@ class BangumiPublicConnector(
             readTime = "评分 $rating",
             theme = classifyTheme(name, summary, "动漫"),
             channel = SourceChannel.Notes,
+            thumbnailUrl = this["images"]?.jsonObject?.text("large").orEmpty()
+                .ifBlank { this["images"]?.jsonObject?.text("common").orEmpty() },
         )
     }
 }

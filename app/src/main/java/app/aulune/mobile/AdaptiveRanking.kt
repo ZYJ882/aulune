@@ -118,9 +118,16 @@ object LocalAdaptiveCore {
         val exploration = if (sourceEvents.isEmpty()) 0.18 else 0.0
         val positive = feedback.filter { it.feedbackType == FeedbackType.Positive.name }
         val negativeThemes = feedback.filter { it.feedbackType == FeedbackType.Negative.name && it.targetType == FeedbackTarget.Theme.name }
-        val positiveTheme = if (positive.any { it.targetType == FeedbackTarget.Theme.name && it.targetKey == item.theme }) 1.25 else 0.0
+        val negativeGroups = feedback.filter { it.feedbackType == FeedbackType.Negative.name && it.targetType == FeedbackTarget.TopicGroup.name }
+        fun hasPositive(target: FeedbackTarget, key: String): Boolean =
+            key.isNotBlank() && positive.any { it.targetType == target.name && it.targetKey == key }
+        val positiveTheme = if (hasPositive(FeedbackTarget.Theme, item.theme)) 1.25 else 0.0
+        val positiveGroup = if (hasPositive(FeedbackTarget.TopicGroup, item.topicGroup)) 0.85 else 0.0
+        val positiveAuthor = if (hasPositive(FeedbackTarget.Author, item.authorKey)) 0.65 else 0.0
+        val positiveSeries = if (hasPositive(FeedbackTarget.Series, item.seriesKey)) 0.55 else 0.0
+        val positiveContent = if (hasPositive(FeedbackTarget.Content, item.contentKey)) 0.35 else 0.0
         val negativeTheme = if (negativeThemes.any { it.targetKey == item.theme }) 2.3 else 0.0
-        val negativeGroup = if (negativeThemes.any { it.targetKey == item.topicGroup }) 1.1 else 0.0
+        val negativeGroup = if (item.topicGroup.isNotBlank() && negativeGroups.any { it.targetKey == item.topicGroup }) 1.1 else 0.0
         val localSignals = (if (item.marked) 1.4 else 0.0) + (if (item.saved) 0.8 else 0.0)
         val intentAdjustment = when (intent) {
             SessionIntent.Balanced -> 0.0
@@ -129,7 +136,7 @@ object LocalAdaptiveCore {
             SessionIntent.Calm -> if (themeFatigue < 0.25 && item.readTime.length <= 8) 0.38 else -themeFatigue * 0.9
         }
         val deterministicTiebreaker = ((item.contentKey.hashCode() xor rotationIndex).absoluteValue % 100) / 1000.0
-        return interest + localSignals + exploration + positiveTheme + intentAdjustment - negativeTheme - negativeGroup - themeFatigue - sourceMonotony + deterministicTiebreaker
+        return interest + localSignals + exploration + positiveTheme + positiveGroup + positiveAuthor + positiveSeries + positiveContent + intentAdjustment - negativeTheme - negativeGroup - themeFatigue - sourceMonotony + deterministicTiebreaker
     }
 
     fun insightFor(item: LocalContentEntity, interest: InterestEntity?, feedback: List<LocalFeedbackEntity>, recentEvents: List<BehaviorEventEntity>): String {

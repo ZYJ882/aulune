@@ -12,6 +12,12 @@ class ExternalUrlPolicyTest {
     }
 
     @Test
+    fun `normalizes only safe web image addresses`() {
+        assertTrue(ExternalUrlPolicy.normalizedHttpUrlOrEmpty("  https://cdn.example.com/cover.webp ").startsWith("https://"))
+        assertTrue(ExternalUrlPolicy.normalizedHttpUrlOrEmpty("file:///sdcard/cover.webp").isEmpty())
+    }
+
+    @Test
     fun `rejects blank malformed and non web links`() {
         assertFalse(ExternalUrlPolicy.isAllowed(""))
         assertFalse(ExternalUrlPolicy.isAllowed("example.com/no-scheme"))

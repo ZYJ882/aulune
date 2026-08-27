@@ -16,9 +16,14 @@ object ExternalUrlPolicy {
         return uri.host?.isNotBlank() == true && uri.scheme?.lowercase() in setOf("http", "https")
     }
 
-    fun viewIntent(rawUrl: String): Intent? {
+    fun normalizedHttpUrlOrEmpty(rawUrl: String): String {
         val normalized = rawUrl.trim()
-        if (!isAllowed(normalized)) return null
+        return normalized.takeIf(::isAllowed).orEmpty()
+    }
+
+    fun viewIntent(rawUrl: String): Intent? {
+        val normalized = normalizedHttpUrlOrEmpty(rawUrl)
+        if (normalized.isBlank()) return null
         return Intent(Intent.ACTION_VIEW, Uri.parse(normalized))
     }
 }

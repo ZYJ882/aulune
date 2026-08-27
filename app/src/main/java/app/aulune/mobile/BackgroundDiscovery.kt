@@ -119,7 +119,7 @@ data class DiscoveryTaskUi(
 
 data class BackgroundDiscoveryUiState(
     val isRunning: Boolean = false,
-    val notice: String = "仅在你点击“立即探测公开来源”后执行；不会在后台自动联网。",
+    val notice: String = "仅在你点击“探索其他公开来源”后执行；不会在后台自动联网。",
     val sources: List<SourceAvailabilityUi> = emptyList(),
     val recentTasks: List<DiscoveryTaskUi> = emptyList()
 )
