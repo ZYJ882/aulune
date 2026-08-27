@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -65,6 +66,7 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -329,23 +331,25 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                         }
                     }
                     Text(
-                        "B 站热门无需登录，适合快速开始；不会读取账号 Cookie。",
+                        "点击“获取内容”会手动导入 B 站公开热门与其他公开来源；不读取账号 Cookie。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Button(
-                        onClick = { viewModel.importBilibiliPublicContent(); haptic.confirm() },
-                        enabled = !localState.isBilibiliImporting,
+                        onClick = { viewModel.importAllPlatformsPublic(); haptic.confirm() },
+                        enabled = !localState.isPlatformSyncing,
                         shape = RoundedCornerShape(28.dp),
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     ) {
-                        if (localState.isBilibiliImporting) {
+                        if (localState.isPlatformSyncing) {
                             CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("正在获取公开内容…", style = MaterialTheme.typography.labelLarge)
                         } else {
                             Icon(Icons.Outlined.Explore, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("导入 B 站热门", style = MaterialTheme.typography.labelLarge)
+                            Text("获取内容", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                     OutlinedButton(
@@ -358,7 +362,7 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                         Text("管理与同步我的账号", style = MaterialTheme.typography.labelMedium)
                     }
                     Text(
-                        "账号同步由你手动发起，可将收藏、观看历史和稍后再看作为本机推荐证据。其他公开来源请使用下方“探索其他公开来源”。",
+                        "账号同步由你手动发起，可将收藏、观看历史和稍后再看作为本机推荐证据。“获取内容”只读取公开内容，不读取 Cookie。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         lineHeight = 16.sp,
@@ -387,12 +391,6 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                 onRun = viewModel::runProfileGuidedDiscovery,
             )
         }
-        item {
-            BackgroundDiscoveryCard(
-                state = localState.backgroundDiscovery,
-                onRunNow = viewModel::runBackgroundDiscoveryNow,
-            )
-        }
         item { FocusPromptCard() }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -415,9 +413,9 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
             item {
                 EmptyStateCard(
                     title = "还没有内容",
-                    description = "点击上方按钮导入 B 站或全平台公开内容，信息流会根据你的本机画像自动排序。",
-                    actionLabel = "导入 B 站内容",
-                    onAction = { viewModel.importBilibiliPublicContent() },
+                    description = "点击上方“获取内容”手动导入 B 站公开热门与其他公开来源，信息流会根据你的本机画像自动排序。",
+                    actionLabel = "获取内容",
+                    onAction = { viewModel.importAllPlatformsPublic() },
                 )
             }
         } else {
@@ -1395,6 +1393,67 @@ private fun SettingsScreen(
 }
 
 @Composable
+internal fun ModelPickerDialog(
+    models: List<String>,
+    selectedModel: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val filtered = remember(models, query) { filterRemoteModels(models, query) }
+    val colors = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择模型", style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("搜索模型") },
+                    placeholder = { Text("例如 gpt、claude、qwen") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(18.dp),
+                )
+                Text(
+                    if (query.isBlank()) "共 ${filtered.size} 个可选模型" else "找到 ${filtered.size} 个匹配模型",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onSurfaceVariant,
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(filtered, key = { it }) { item ->
+                        Surface(
+                            color = if (item == selectedModel) colors.primaryContainer else colors.surfaceVariant,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth().clickable { onSelect(item) },
+                        ) {
+                            Text(
+                                item,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (item == selectedModel) colors.onPrimaryContainer else colors.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                            )
+                        }
+                    }
+                    if (filtered.isEmpty()) {
+                        item {
+                            Text("没有匹配模型；可清空搜索或继续手动填写。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
+}
+
+@Composable
 private fun ModelConfigCard(
     provider: AiProvider,
     store: AuluneStore,
@@ -1408,6 +1467,7 @@ private fun ModelConfigCard(
     var modelStatus by rememberSaveable(provider) { mutableStateOf("可手动填写模型名，或用 API Key 获取列表。") }
     var isLoadingModels by rememberSaveable(provider) { mutableStateOf(false) }
     var remoteModels by rememberSaveable(provider) { mutableStateOf(emptyList<String>()) }
+    var showModelPicker by rememberSaveable(provider) { mutableStateOf(false) }
     val configured = store.providerSettings.filterValues { it.apiKey.isNotBlank() }.keys
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1454,8 +1514,9 @@ private fun ModelConfigCard(
                 scope.launch {
                     LlmClient().listModels(provider, requestSettings)
                         .onSuccess { models ->
-                            remoteModels = models.map { it.id }
-                            modelStatus = if (models.isEmpty()) "服务商未返回可用模型；仍可手动填写。" else "已获取 ${models.size} 个模型，点选即可填入。"
+                            remoteModels = filterRemoteModels(models.map { it.id }, query = "")
+                            showModelPicker = remoteModels.isNotEmpty()
+                            modelStatus = if (remoteModels.isEmpty()) "服务商未返回可用模型；仍可手动填写。" else "已获取 ${remoteModels.size} 个模型；已打开可搜索列表。"
                         }
                         .onFailure { error ->
                             remoteModels = emptyList()
@@ -1474,14 +1535,27 @@ private fun ModelConfigCard(
         }
         Text(modelStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (remoteModels.isNotEmpty()) {
-            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                remoteModels.forEach { item ->
-                    AssistChip(
-                        onClick = { model = item },
-                        label = { Text(item, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    )
-                }
+            OutlinedButton(
+                onClick = { showModelPicker = true },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+            ) {
+                Icon(Icons.Outlined.Explore, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("浏览并搜索 ${remoteModels.size} 个模型", style = MaterialTheme.typography.labelMedium)
             }
+        }
+        if (showModelPicker) {
+            ModelPickerDialog(
+                models = remoteModels,
+                selectedModel = model,
+                onDismiss = { showModelPicker = false },
+                onSelect = { selected ->
+                    model = selected
+                    modelStatus = "已选择模型：$selected"
+                    showModelPicker = false
+                },
+            )
         }
         Button(
             onClick = {
