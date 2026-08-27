@@ -1,6 +1,7 @@
 package app.aulune.mobile
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -13,7 +14,10 @@ enum class InterestHypothesisStatus(val label: String) {
     Expired("已过期")
 }
 
-@Entity(tableName = "local_interest_hypothesis")
+@Entity(
+    tableName = "local_interest_hypothesis",
+    indices = [Index(value = ["status"]), Index(value = ["createdAt"])]
+)
 data class InterestHypothesisEntity(
     @PrimaryKey val id: String,
     val candidateTheme: String,
