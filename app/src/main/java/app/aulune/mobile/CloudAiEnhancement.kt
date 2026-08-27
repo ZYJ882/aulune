@@ -50,10 +50,10 @@ class SecureCloudAiSettings(context: Context) {
             .putString("base_url", config.baseUrl.trim())
             .putString("protocol", normalizedProtocol.name)
             .putBoolean("enabled", config.enabled)
-            .apply()
+            .commit()
     }
 
-    fun clear() { preferences.edit().clear().apply() }
+    fun clear() { preferences.edit().clear().commit() }
 }
 
 data class CloudContentAnalysis(

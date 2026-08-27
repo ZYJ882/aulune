@@ -56,6 +56,47 @@ class ProviderConfigurationTest {
     }
 
     @Test
+    fun cloudConfigFallbackRestoresMissingProviderProfileAfterRestart() {
+        val cloud = CloudAiConfig(
+            provider = AiProvider.OpenRouter,
+            apiKey = "saved-key",
+            model = "openai/gpt-4o-mini",
+            baseUrl = "https://openrouter.ai/api/v1",
+            protocol = ProviderProtocol.OpenAiCompatible,
+            enabled = true,
+        )
+
+        val restored = ProviderProfilesSnapshot().withCloudConfigFallback(cloud)
+
+        assertEquals(AiProvider.OpenRouter, restored.selectedProvider)
+        assertEquals("saved-key", restored.profiles.getValue(AiProvider.OpenRouter).apiKey)
+        assertEquals("openai/gpt-4o-mini", restored.profiles.getValue(AiProvider.OpenRouter).model)
+    }
+
+    @Test
+    fun emptyCloudConfigDoesNotChangeExistingProfiles() {
+        val stored = ProviderProfilesSnapshot(
+            selectedProvider = AiProvider.Kimi,
+            profiles = mapOf(AiProvider.Kimi to ProviderSettings(apiKey = "profile-key", model = "kimi-k2")),
+        )
+
+        assertEquals(stored, stored.withCloudConfigFallback(CloudAiConfig()))
+    }
+
+    @Test
+    fun cloudConfigFallbackNeverOverwritesAnExistingProviderProfile() {
+        val stored = ProviderProfilesSnapshot(
+            selectedProvider = AiProvider.Kimi,
+            profiles = mapOf(AiProvider.OpenRouter to ProviderSettings(apiKey = "profile-key", model = "stored-model")),
+        )
+        val cloud = CloudAiConfig(provider = AiProvider.OpenRouter, apiKey = "cloud-key", model = "cloud-model")
+
+        val restored = stored.withCloudConfigFallback(cloud)
+
+        assertEquals(stored, restored)
+    }
+
+    @Test
     fun profileCodecRoundTripsProviderSettings() {
         val snapshot = ProviderProfilesSnapshot(
             selectedProvider = AiProvider.OpenRouter,

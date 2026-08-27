@@ -1482,7 +1482,13 @@ private fun ModelConfigCard(
             }
         }
         OutlinedTextField(
-            value = apiKey, onValueChange = { apiKey = it },
+            value = apiKey, onValueChange = {
+                apiKey = it
+                store.saveProviderDraft(
+                    provider,
+                    ProviderSettings(apiKey = it.trim(), model = model.trim(), baseUrl = baseUrl.trim(), protocol = provider.protocol),
+                )
+            },
             label = { Text("API Key") },
             placeholder = { Text(provider.keyHint) },
             modifier = Modifier.fillMaxWidth(),
@@ -1491,7 +1497,13 @@ private fun ModelConfigCard(
             visualTransformation = PasswordVisualTransformation(),
         )
         OutlinedTextField(
-            value = baseUrl, onValueChange = { baseUrl = it },
+            value = baseUrl, onValueChange = {
+                baseUrl = it
+                store.saveProviderDraft(
+                    provider,
+                    ProviderSettings(apiKey = apiKey.trim(), model = model.trim(), baseUrl = it.trim(), protocol = provider.protocol),
+                )
+            },
             label = { Text("接口基础地址") },
             placeholder = { Text(provider.defaultBaseUrl) },
             modifier = Modifier.fillMaxWidth(),
@@ -1499,18 +1511,31 @@ private fun ModelConfigCard(
             shape = RoundedCornerShape(28.dp),
         )
         OutlinedTextField(
-            value = model, onValueChange = { model = it },
+            value = model, onValueChange = {
+                model = it
+                store.saveProviderDraft(
+                    provider,
+                    ProviderSettings(apiKey = apiKey.trim(), model = it.trim(), baseUrl = baseUrl.trim(), protocol = provider.protocol),
+                )
+            },
             label = { Text("模型名称") },
             placeholder = { Text(provider.defaultModel.ifBlank { "例如 provider/model-name" }) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
         )
+        Text(
+            "输入内容会自动加密保存在本机；点击“保存并启用”后才会启用云端 API。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Button(
             onClick = {
                 isLoadingModels = true
                 modelStatus = "正在获取模型列表…"
                 val requestSettings = ProviderSettings(apiKey = apiKey.trim(), model = model.trim(), baseUrl = baseUrl.trim(), protocol = provider.protocol)
+                store.saveProviderDraft(provider, requestSettings)
+                modelStatus = "已保存本机配置草稿，正在获取模型列表…"
                 scope.launch {
                     LlmClient().listModels(provider, requestSettings)
                         .onSuccess { models ->
@@ -1552,7 +1577,11 @@ private fun ModelConfigCard(
                 onDismiss = { showModelPicker = false },
                 onSelect = { selected ->
                     model = selected
-                    modelStatus = "已选择模型：$selected"
+                    store.saveProviderDraft(
+                        provider,
+                        ProviderSettings(apiKey = apiKey.trim(), model = selected, baseUrl = baseUrl.trim(), protocol = provider.protocol),
+                    )
+                    modelStatus = "已选择并保存模型：$selected"
                     showModelPicker = false
                 },
             )

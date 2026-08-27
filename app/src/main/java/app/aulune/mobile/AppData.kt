@@ -117,12 +117,11 @@ class SecureProviderProfiles(context: Context) {
         )
     }.getOrDefault(ProviderProfilesSnapshot())
 
-    fun save(snapshot: ProviderProfilesSnapshot) {
+    fun save(snapshot: ProviderProfilesSnapshot): Boolean =
         preferences.edit()
             .putString("profiles", ProviderProfilesCodec.encode(snapshot))
             .putString("selected", snapshot.selectedProvider.name)
-            .apply()
-    }
+            .commit()
 }
 
 /** A UI projection of a persisted local content item. */
@@ -155,8 +154,19 @@ data class ConversationMessage(
     val time: String
 )
 
+internal fun ProviderProfilesSnapshot.withCloudConfigFallback(cloud: CloudAiConfig): ProviderProfilesSnapshot {
+    if (cloud.apiKey.isBlank()) return this
+    val existing = profiles[cloud.provider]
+    if (existing?.apiKey?.isNotBlank() == true) return this
+    return copy(
+        selectedProvider = if (profiles.isEmpty()) cloud.provider else selectedProvider,
+        profiles = profiles + (cloud.provider to cloud.providerSettings()),
+    )
+}
+
 class AuluneStore(context: Context) {
     private val secureProfiles = SecureProviderProfiles(context)
+    private val secureCloudSettings = SecureCloudAiSettings(context)
     val messages = mutableStateListOf<ConversationMessage>()
     val providerSettings = mutableStateMapOf<AiProvider, ProviderSettings>()
 
@@ -167,9 +177,11 @@ class AuluneStore(context: Context) {
         private set
 
     init {
-        val snapshot = secureProfiles.load()
+        val storedSnapshot = secureProfiles.load()
+        val snapshot = storedSnapshot.withCloudConfigFallback(secureCloudSettings.load())
         providerSettings.putAll(snapshot.profiles)
         selectedProvider = snapshot.selectedProvider
+        if (snapshot != storedSnapshot) secureProfiles.save(snapshot)
         val active = providerSettings[selectedProvider]
         aiStatus = if (active?.apiKey.isNullOrBlank()) "本地对话模式" else "${selectedProvider.displayName} 已就绪"
     }
@@ -186,13 +198,29 @@ class AuluneStore(context: Context) {
     }
 
     fun setProviderSettings(provider: AiProvider, settings: ProviderSettings) {
+        updateProviderSettings(provider, settings, updateStatus = true)
+    }
+
+    /**
+     * 保存用户在模型工作台输入的草稿，不会启用云端调用。
+     * 这让“获取模型列表”后的关闭或进程重建不再丢失 Key、地址和模型名称。
+     */
+    fun saveProviderDraft(provider: AiProvider, settings: ProviderSettings) {
+        updateProviderSettings(provider, settings, updateStatus = false)
+    }
+
+    private fun updateProviderSettings(provider: AiProvider, settings: ProviderSettings, updateStatus: Boolean) {
         val normalized = settings.copy(
             protocol = if (provider == AiProvider.Custom) settings.effectiveProtocol(provider) else provider.protocol
         )
         providerSettings[provider] = normalized
         selectedProvider = provider
-        aiStatus = if (normalized.apiKey.isBlank()) "本地对话模式" else "${provider.displayName} 已就绪"
-        persist()
+        if (updateStatus) {
+            aiStatus = if (normalized.apiKey.isBlank()) "本地对话模式" else "${provider.displayName} 已就绪"
+        }
+        if (!persist()) {
+            aiStatus = "本机配置保存失败，请检查设备存储后重试。"
+        }
     }
 
     fun updateGenerating(value: Boolean) {
@@ -202,5 +230,5 @@ class AuluneStore(context: Context) {
 
     fun updateAiStatus(value: String) { aiStatus = value }
 
-    private fun persist() = secureProfiles.save(ProviderProfilesSnapshot(selectedProvider, providerSettings.toMap()))
+    private fun persist(): Boolean = secureProfiles.save(ProviderProfilesSnapshot(selectedProvider, providerSettings.toMap()))
 }
