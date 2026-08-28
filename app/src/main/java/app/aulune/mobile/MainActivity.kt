@@ -48,6 +48,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Palette
@@ -128,6 +130,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1449,6 +1452,7 @@ private fun SettingsScreen(
     val currentThemeMode = ThemeManager.getMode(context)
     val dynamicEnabled = ThemeManager.isDynamicColorEnabled(context)
     var expandedProvider by rememberSaveable { mutableStateOf(store.selectedProvider) }
+    var showLogs by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1500,6 +1504,28 @@ private fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+        // 日志设置
+        item {
+            Card(
+                onClick = { showLogs = true },
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("日志设置", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                        Text("查看最近的脱敏运行记录，了解模型调用和本机处理状态", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("查看日志", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -1558,6 +1584,58 @@ private fun SettingsScreen(
             }
         }
     }
+    if (showLogs) {
+        DiagnosticLogDialog(
+            diagnostics = remember(context) { AuluneDiagnostics(context) },
+            onDismiss = { showLogs = false },
+        )
+    }
+}
+
+@Composable
+private fun DiagnosticLogDialog(
+    diagnostics: AuluneDiagnostics,
+    onDismiss: () -> Unit,
+) {
+    var content by remember { mutableStateOf(diagnostics.read()) }
+    var copied by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("运行日志") },
+        text = {
+            SelectionContainer {
+                Column(
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        if (content.isBlank()) "暂无日志。完成一次本机认知或云端操作后，这里会显示脱敏记录。" else content,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 18.sp,
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = {
+                    diagnostics.clear()
+                    content = ""
+                    copied = false
+                }) { Text("清除") }
+                TextButton(onClick = {
+                    if (content.isNotBlank()) {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Aulune 运行日志", content))
+                        copied = true
+                    }
+                }) { Text(if (copied) "已复制" else "复制") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
 }
 
 @Composable

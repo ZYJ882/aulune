@@ -199,7 +199,7 @@ class CloudAiSemanticService(private val client: LlmClient = LlmClient()) {
             ConversationMessage(1, false, "你是用户画像候选生成器。只返回 JSON，不要 Markdown。字段：valuesCandidate（不超过80字，必须表述为可供用户确认的长期方向，不是事实断言）、coreCandidate（不超过80字，必须明确为可选边界建议）。不可编造个人敏感信息。", ""),
             ConversationMessage(2, true, "会话意图：${intent.label}\n本机事件数：$eventCount\n聚合兴趣证据：$evidence", "")
         )
-        return client.generate(config.provider, config.providerSettings(), messages)
+        return client.generate(config.provider, config.providerSettings(), messages, structuredJson = true)
             .mapCatching { text ->
                 val payload = CloudJsonResponseParser.extractObject(text)
                 CloudProfileAnalysis(

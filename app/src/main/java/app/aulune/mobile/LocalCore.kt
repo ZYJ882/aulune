@@ -985,6 +985,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     private val bilibiliSync = MutableStateFlow(BilibiliSyncUiState())
     private val sessionIntent = MutableStateFlow(SessionIntent.Balanced)
     private val secureCloudSettings = SecureCloudAiSettings(application)
+    private val diagnostics = AuluneDiagnostics(application)
     private val cloudService = CloudAiSemanticService()
     private val cloudConfig = MutableStateFlow(secureCloudSettings.load())
     private val cloudUi = MutableStateFlow(cloudUiState(secureCloudSettings.load()))
@@ -1142,6 +1143,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
                     completedAt = snapshot.generatedAt,
                 )
             }.onFailure { error ->
+                diagnostics.record("ERROR", "本机 Agent 认知失败：${error.message ?: "未知错误"}")
                 agentRun.value = AgentRunUiState(AgentRunPhase.Failed, "本轮本机认知未完成：${error.message ?: "请稍后重试。"}")
             }
         }
@@ -1215,6 +1217,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
                     cloudUi.value = cloudUiState(config, status = "云端内容分析已保存到本机；后续排序仍由本机执行。")
                 }
                 .onFailure { error ->
+                    diagnostics.record("ERROR", "云端内容分析失败：${error.message ?: "未知错误"}")
                     cloudUi.value = cloudUiState(config, status = "云端分析失败，已保留本机规则：${error.message ?: "请检查 Key、模型和网络。"}")
                 }
         }
@@ -1257,6 +1260,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun buildCloudProfileCandidate() {
         val config = cloudConfig.value
+        diagnostics.record("INFO", "用户主动开始云端画像候选：provider=${config.provider.displayName}，model=${config.effectiveModel}")
         if (!config.isUsable || cloudUi.value.isWorking) {
             cloudUi.value = cloudUiState(config, status = "未启用云端 AI；长期画像仍使用本机候选。")
             return
@@ -1267,9 +1271,11 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             cloudService.buildProfileCandidate(config, input.interests, input.intent, input.eventCount)
                 .onSuccess { analysis ->
                     repository.applyCloudProfileAnalysis(analysis)
+                    diagnostics.record("INFO", "云端画像候选生成成功，已写入待确认区域")
                     cloudUi.value = cloudUiState(config, status = "云端候选已写入待确认区域；不会自动成为长期画像。")
                 }
                 .onFailure { error ->
+                    diagnostics.record("ERROR", "云端画像候选失败：${error.message ?: "未知错误"}")
                     cloudUi.value = cloudUiState(config, status = "云端候选生成失败，已保留本机候选：${error.message ?: "请检查 Key、模型和网络。"}")
                 }
         }

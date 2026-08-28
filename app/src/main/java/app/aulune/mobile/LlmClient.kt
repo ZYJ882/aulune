@@ -1,6 +1,7 @@
 package app.aulune.mobile
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -60,6 +61,24 @@ internal object LlmResponseParser {
     }.getOrElse { throw IOException(message.ifBlank { "接口返回了无法解析的错误响应。" }) }
 }
 
+internal object LlmErrorPolicy {
+    fun isTransient(error: Throwable): Boolean {
+        val message = error.message.orEmpty()
+        return Regex("HTTP\\s+(429|5\\d{2})").containsMatchIn(message)
+    }
+
+    fun userMessage(error: Throwable): String {
+        val message = error.message.orEmpty()
+        return when {
+            Regex("HTTP\\s+502", RegexOption.IGNORE_CASE).containsMatchIn(message) && message.contains("overload", ignoreCase = true) ->
+                "OpenRouter 上游模型暂时过载（502），本次已自动重试 3 次仍未成功。请稍后重试，或更换一个模型。"
+            Regex("HTTP\\s+429", RegexOption.IGNORE_CASE).containsMatchIn(message) ->
+                "OpenRouter 当前触发限流（429），本次已自动重试 3 次仍未成功。请稍后重试或降低请求频率。"
+            else -> message.ifBlank { "云端模型调用失败，请检查模型、API Key、额度或接口地址。" }
+        }
+    }
+}
+
 internal object LlmProtocolSupport {
     fun endpointUrl(base: String, suffix: String): String {
         val trimmed = base.trimEnd('/')
@@ -100,19 +119,39 @@ class LlmClient {
     suspend fun generate(
         provider: AiProvider,
         settings: ProviderSettings,
-        messages: List<ConversationMessage>
+        messages: List<ConversationMessage>,
+        structuredJson: Boolean = false,
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             require(settings.apiKey.isNotBlank()) { "请先在“模型”页填写 ${provider.displayName} API Key。" }
             require(settings.effectiveBaseUrl(provider).startsWith("https://")) { "接口地址必须使用 HTTPS。" }
             val model = settings.effectiveModel(provider)
             require(model.isNotBlank()) { "请填写模型名称或从模型列表中选择。" }
-            when (settings.effectiveProtocol(provider)) {
-                ProviderProtocol.OpenAiCompatible -> callOpenAiCompatible(provider, settings, model, messages)
-                ProviderProtocol.AnthropicMessages -> callAnthropic(provider, settings, model, messages)
-                ProviderProtocol.GeminiGenerateContent -> callGemini(provider, settings, model, messages)
+            retryTransient {
+                when (settings.effectiveProtocol(provider)) {
+                    ProviderProtocol.OpenAiCompatible -> callOpenAiCompatible(provider, settings, model, messages, structuredJson)
+                    ProviderProtocol.AnthropicMessages -> callAnthropic(provider, settings, model, messages)
+                    ProviderProtocol.GeminiGenerateContent -> callGemini(provider, settings, model, messages, structuredJson)
+                }
+            }
+        }.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { Result.failure(IOException(LlmErrorPolicy.userMessage(it), it)) }
+        )
+    }
+
+    private suspend fun retryTransient(block: () -> String): String {
+        var lastError: IOException? = null
+        repeat(3) { attempt ->
+            try {
+                return block()
+            } catch (error: IOException) {
+                lastError = error
+                if (!LlmErrorPolicy.isTransient(error) || attempt == 2) throw error
+                delay(700L * (attempt + 1))
             }
         }
+        throw lastError ?: IOException("云端模型调用失败。")
     }
 
     suspend fun listModels(provider: AiProvider, settings: ProviderSettings): Result<List<RemoteModel>> = withContext(Dispatchers.IO) {
@@ -146,12 +185,13 @@ class LlmClient {
         }
     }
 
-    private fun callOpenAiCompatible(provider: AiProvider, settings: ProviderSettings, model: String, messages: List<ConversationMessage>): String {
+    private fun callOpenAiCompatible(provider: AiProvider, settings: ProviderSettings, model: String, messages: List<ConversationMessage>, structuredJson: Boolean): String {
         val payload = JSONObject().apply {
             put("model", model)
             put("messages", openAiMessages(messages))
             put("temperature", 0.7)
             put("stream", false)
+            if (structuredJson) put("response_format", JSONObject().put("type", "json_object"))
         }
         val request = baseRequest(chatUrl(settings.effectiveBaseUrl(provider)), payload)
             .header("Authorization", "Bearer ${settings.apiKey.trim()}")
@@ -186,7 +226,7 @@ class LlmClient {
         }.ifBlank { "模型没有返回可显示的文本。" }
     }
 
-    private fun callGemini(provider: AiProvider, settings: ProviderSettings, model: String, messages: List<ConversationMessage>): String {
+    private fun callGemini(provider: AiProvider, settings: ProviderSettings, model: String, messages: List<ConversationMessage>, structuredJson: Boolean): String {
         val contents = JSONArray()
         conversationWindow(messages).forEach { message ->
             contents.put(JSONObject().apply {
@@ -197,7 +237,9 @@ class LlmClient {
         val payload = JSONObject().apply {
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             put("contents", contents)
-            put("generationConfig", JSONObject().put("temperature", 0.7).put("maxOutputTokens", 1024))
+            put("generationConfig", JSONObject().put("temperature", 0.7).put("maxOutputTokens", 1024).apply {
+                if (structuredJson) put("responseMimeType", "application/json")
+            })
         }
         val normalizedModel = model.removePrefix("models/")
         val endpoint = "${settings.effectiveBaseUrl(provider).trimEnd('/')}/models/" +

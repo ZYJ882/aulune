@@ -103,6 +103,7 @@ class LocalLibraryViewModel(application: Application) : AndroidViewModel(applica
 
 class LocalConversationViewModel(application: Application) : AndroidViewModel(application) {
     private val dao = AuluneLocalDatabase.create(application).localCoreDao()
+    private val diagnostics = AuluneDiagnostics(application)
     private val _isGenerating = MutableStateFlow(false)
     private val _status = MutableStateFlow("本地持久化对话")
 
@@ -130,6 +131,7 @@ class LocalConversationViewModel(application: Application) : AndroidViewModel(ap
         if (input.isBlank() || _isGenerating.value) return
         viewModelScope.launch {
             if (settings.apiKey.isBlank()) {
+                diagnostics.record("WARN", "对话未发送：${provider.displayName} 尚未配置 API Key")
                 insert(false, "请先打开“模型”页，选择 ${provider.displayName} 并填写 API Key。对话记录仍会保留在本机。")
                 _status.value = "等待模型配置"
                 return@launch
@@ -142,13 +144,16 @@ class LocalConversationViewModel(application: Application) : AndroidViewModel(ap
             )
             insert(true, input)
             _isGenerating.value = true
+            diagnostics.record("INFO", "用户主动开始对话：provider=${provider.displayName}，model=${settings.effectiveModel(provider)}")
             _status.value = "${provider.displayName} 正在思考"
             client.generate(provider, settings, history)
                 .onSuccess { answer ->
+                    diagnostics.record("INFO", "对话调用成功：provider=${provider.displayName}")
                     insert(false, answer)
                     _status.value = "${provider.displayName} 已完成"
                 }
                 .onFailure { error ->
+                    diagnostics.record("ERROR", "对话调用失败：${error.message ?: "未知错误"}")
                     insert(false, "调用失败：${error.message ?: "请检查网络、Key 和模型名称。"}")
                     _status.value = "调用未成功"
                 }

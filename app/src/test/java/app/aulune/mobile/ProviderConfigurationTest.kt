@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 class ProviderConfigurationTest {
     @Test
@@ -118,6 +119,16 @@ class ProviderConfigurationTest {
         val malformed = runCatching { LlmResponseParser.openAiText("not-json") }.exceptionOrNull()
         assertTrue(empty?.message?.contains("空 choices") == true)
         assertTrue(malformed?.message?.contains("无法解析") == true)
+    }
+
+    @Test
+    fun transientUpstreamErrorsHaveActionableMessages() {
+        val overload = IOException("HTTP 502：Upstream error from Nvidia: Service temporarily overloaded")
+        val rateLimited = IOException("HTTP 429：rate limit exceeded")
+        assertTrue(LlmErrorPolicy.isTransient(overload))
+        assertTrue(LlmErrorPolicy.isTransient(rateLimited))
+        assertTrue(LlmErrorPolicy.userMessage(overload).contains("上游模型暂时过载"))
+        assertTrue(LlmErrorPolicy.userMessage(rateLimited).contains("触发限流"))
     }
 
     @Test
