@@ -1165,14 +1165,13 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         protocol: ProviderProtocol? = null,
         enable: Boolean
     ) {
-        val previous = cloudConfig.value
-        val updated = CloudAiConfig(
+        val updated = normalizedCloudAiConfig(
             provider = provider,
-            apiKey = apiKey.ifBlank { previous.apiKey },
-            model = model.ifBlank { provider.defaultModel },
-            baseUrl = baseUrl.ifBlank { provider.defaultBaseUrl },
-            protocol = protocol ?: provider.protocol,
-            enabled = enable
+            apiKey = apiKey,
+            model = model,
+            baseUrl = baseUrl,
+            protocol = protocol,
+            enable = enable,
         )
         secureCloudSettings.save(updated)
         cloudConfig.value = updated
@@ -1186,7 +1185,12 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         cloudUi.value = cloudUiState(updated)
     }
 
-    fun clearCloudAiKey() {
+    /**
+     * 清除当前启用服务商的云端增强配置。若用户正在编辑其他服务商，不会误删其配置。
+     */
+    fun clearCloudAiConfig(provider: AiProvider) {
+        val current = cloudConfig.value
+        if (current.provider != provider) return
         secureCloudSettings.clear()
         cloudConfig.value = CloudAiConfig()
         cloudUi.value = cloudUiState(CloudAiConfig())

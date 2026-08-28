@@ -21,6 +21,29 @@ data class CloudAiConfig(
     fun providerSettings(): ProviderSettings = ProviderSettings(apiKey, effectiveModel, effectiveBaseUrl, effectiveProtocol)
 }
 
+/**
+ * 将用户当前输入归一化为一份独立的云端增强配置。
+ * 空 Key 不会隐式继承上一服务商的 Key，也不能启用云端调用。
+ */
+internal fun normalizedCloudAiConfig(
+    provider: AiProvider,
+    apiKey: String,
+    model: String,
+    baseUrl: String = "",
+    protocol: ProviderProtocol? = null,
+    enable: Boolean,
+): CloudAiConfig {
+    val normalizedKey = apiKey.trim()
+    return CloudAiConfig(
+        provider = provider,
+        apiKey = normalizedKey,
+        model = model.trim().ifBlank { provider.defaultModel },
+        baseUrl = baseUrl.trim().ifBlank { provider.defaultBaseUrl },
+        protocol = protocol ?: provider.protocol,
+        enabled = enable && normalizedKey.isNotBlank(),
+    )
+}
+
 class SecureCloudAiSettings(context: Context) {
     private val preferences = EncryptedSharedPreferences.create(
         context,
