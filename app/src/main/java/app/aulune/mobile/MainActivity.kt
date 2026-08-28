@@ -967,6 +967,15 @@ private fun CompassScreen(viewModel: LocalFeedViewModel) {
             Spacer(Modifier.height(4.dp))
             Text("由你在这台手机上的打开、标记和收藏行为生成；你可以随时用新的行为改变它。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
         }
+        item {
+            AgentCognitiveCard(
+                snapshot = localState.agentSnapshot,
+                run = localState.agentRun,
+                cloudEnabled = localState.cloudAi.enabled && localState.cloudAi.hasKey,
+                onRun = viewModel::runAgentCognition,
+                onCloud = viewModel::buildCloudProfileCandidate,
+            )
+        }
         // 核心边界
         item {
             Card(
@@ -1082,6 +1091,67 @@ private fun CompassScreen(viewModel: LocalFeedViewModel) {
         }
         item {
             Text("主题归并、系列识别、重排和分层画像均由手机内的确定性规则完成。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 16.sp)
+        }
+    }
+}
+
+@Composable
+private fun AgentCognitiveCard(
+    snapshot: AgentCognitiveSnapshot,
+    run: AgentRunUiState,
+    cloudEnabled: Boolean,
+    onRun: () -> Unit,
+    onCloud: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.primaryContainer.copy(alpha = 0.42f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("本地 Agent 认知闭环", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                    Text("${run.phase.label} · 点击前不联网", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                }
+            }
+            Text(snapshot.summary, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, lineHeight = 19.sp)
+            snapshot.layers.forEach { layer ->
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(layer.name, style = MaterialTheme.typography.labelMedium, color = colors.primary, modifier = Modifier.width(112.dp))
+                    Text(layer.description, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f), lineHeight = 16.sp)
+                }
+            }
+            if (snapshot.pendingConfirmations > 0) {
+                Text("有 ${snapshot.pendingConfirmations} 个候选需要在下方确认或拒绝；候选不会自动变成你的长期画像。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+            }
+            Button(
+                onClick = onRun,
+                enabled = run.phase != AgentRunPhase.Synthesizing,
+
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+            ) {
+                if (run.phase == AgentRunPhase.Synthesizing) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = colors.onPrimary, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (run.phase == AgentRunPhase.Synthesizing) "正在运行本机认知…" else "运行一次本机 Agent 认知", style = MaterialTheme.typography.labelLarge)
+            }
+            if (cloudEnabled) {
+                OutlinedButton(
+                    onClick = onCloud,
+                    enabled = run.phase != AgentRunPhase.Synthesizing,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                ) {
+                    Text("用已启用模型增强画像候选", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            Text(run.notice, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
     }
 }

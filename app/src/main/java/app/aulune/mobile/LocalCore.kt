@@ -138,6 +138,9 @@ interface LocalCoreDao {
     @Query("SELECT * FROM local_feedback ORDER BY occurredAt DESC LIMIT :limit")
     fun observeFeedback(limit: Int = 100): Flow<List<LocalFeedbackEntity>>
 
+    @Query("SELECT * FROM local_feedback ORDER BY occurredAt DESC")
+    suspend fun allFeedback(): List<LocalFeedbackEntity>
+
     @Query("SELECT * FROM local_profile ORDER BY layer ASC")
     fun observeProfiles(): Flow<List<LocalProfileEntity>>
 
@@ -428,6 +431,8 @@ data class LocalFeedUiState(
     val platformSyncStatus: Map<ContentPlatform, String> = emptyMap(),
     val platformLoginStatus: Map<ContentPlatform, String> = emptyMap(),
     val backgroundDiscovery: BackgroundDiscoveryUiState = BackgroundDiscoveryUiState(),
+    val agentRun: AgentRunUiState = AgentRunUiState(),
+    val agentSnapshot: AgentCognitiveSnapshot = AgentCognitiveSnapshot(emptyList(), emptyList(), 0, 0L),
 )
 
 internal data class CloudProfileInput(
@@ -441,7 +446,8 @@ private data class PlatformIntegrationState(
     val syncing: Boolean,
     val syncStatus: Map<ContentPlatform, String>,
     val loginStatus: Map<ContentPlatform, String>,
-    val backgroundDiscovery: BackgroundDiscoveryUiState
+    val backgroundDiscovery: BackgroundDiscoveryUiState,
+    val agentRun: AgentRunUiState,
 )
 
 internal data class RankingSnapshot(
@@ -568,6 +574,19 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         intent = loadIntent(),
         eventCount = dao.eventCount()
     )
+
+    suspend fun synthesizeAgentSnapshot(): AgentCognitiveSnapshot {
+        val snapshot = RankingSnapshot(
+            content = dao.allContent(),
+            savedCount = dao.allContent().count { it.saved },
+            interests = dao.interestsNow(),
+            events = dao.allEvents(),
+            feedback = dao.allFeedback(),
+            profiles = dao.profilesNow(),
+            hypotheses = dao.interestHypothesesNow(),
+        )
+        return AuluneAgentPolicy.synthesize(snapshot)
+    }
 
     suspend fun confirmProfileLayer(layer: ProfileLayer) {
         if (layer !in setOf(ProfileLayer.Values, ProfileLayer.Core)) return
@@ -989,8 +1008,12 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             recentTasks = tasks.map { it.toUi() }
         )
     }
-    private val integrationState = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus, _platformLoginStatus, backgroundDiscovery) { cloud, syncing, syncStatus, loginStatus, discovery ->
-        PlatformIntegrationState(cloud, syncing, syncStatus, loginStatus, discovery)
+    private val agentRun = MutableStateFlow(AgentRunUiState())
+    private val integrationCore = combine(cloudUi, _isPlatformSyncing, _platformSyncStatus, _platformLoginStatus, backgroundDiscovery) { cloud, syncing, syncStatus, loginStatus, discovery ->
+        PlatformIntegrationState(cloud, syncing, syncStatus, loginStatus, discovery, AgentRunUiState())
+    }
+    private val integrationState = combine(integrationCore, agentRun) { state, agentState ->
+        state.copy(agentRun = agentState)
     }
 
     val uiState: StateFlow<LocalFeedUiState> = combine(
@@ -1008,7 +1031,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         val ordered = snapshot.content
             .map(LocalAdaptiveCore::normalize)
             .filterNot { LocalAdaptiveCore.shouldExclude(it, snapshot.feedback) }
-            .map { item -> item to LocalAdaptiveCore.score(item, snapshot.interests, snapshot.events, snapshot.feedback, rotationIndex, intent) }
+            .map { item -> item to AuluneAgentPolicy.evaluate(item, snapshot, rotationIndex, intent).score }
             .sortedByDescending { it.second }
             .map { (item, _) -> item.toCuratedItem(snapshot.interests, snapshot.feedback, snapshot.events) }
         val top = snapshot.interests.maxByOrNull { it.weight }
@@ -1038,6 +1061,8 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             platformSyncStatus = platformStatus,
             platformLoginStatus = platformLoginStatus,
             backgroundDiscovery = backgroundDiscovery,
+            agentRun = integration.agentRun,
+            agentSnapshot = AuluneAgentPolicy.synthesize(snapshot),
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocalFeedUiState())
 
@@ -1092,6 +1117,34 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun decideInterestHypothesis(id: String, confirmed: Boolean) {
         viewModelScope.launch { repository.decideInterestHypothesis(id, confirmed) }
+    }
+
+    /** 用户主动运行一次本地认知闭环；只读写本机数据库，不联网。 */
+    fun runAgentCognition() {
+        if (agentRun.value.phase == AgentRunPhase.Synthesizing) return
+        agentRun.value = AgentRunUiState(
+            phase = AgentRunPhase.Synthesizing,
+            notice = "正在整理本机事件、偏好、候选意识和已确认画像；本轮不会联网。",
+        )
+        viewModelScope.launch {
+            runCatching {
+                repository.applyInterestLifecycle()
+                repository.refreshInterestHypotheses()
+                repository.synthesizeAgentSnapshot()
+            }.onSuccess { snapshot ->
+                agentRun.value = AgentRunUiState(
+                    phase = if (snapshot.pendingConfirmations > 0) AgentRunPhase.AwaitingConfirmation else AgentRunPhase.Ready,
+                    notice = if (snapshot.pendingConfirmations > 0) {
+                        "本轮完成；有 ${snapshot.pendingConfirmations} 个候选需要你确认或拒绝。"
+                    } else {
+                        "本轮完成；推荐重点已按本机证据更新。"
+                    },
+                    completedAt = snapshot.generatedAt,
+                )
+            }.onFailure { error ->
+                agentRun.value = AgentRunUiState(AgentRunPhase.Failed, "本轮本机认知未完成：${error.message ?: "请稍后重试。"}")
+            }
+        }
     }
 
     fun extractDialogueInterestHypotheses(messages: List<String>, onFinished: (String) -> Unit) {
