@@ -1,6 +1,7 @@
 package app.aulune.mobile
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,6 +95,37 @@ class ProviderConfigurationTest {
         val restored = stored.withCloudConfigFallback(cloud)
 
         assertEquals(stored, restored)
+    }
+
+    @Test
+    fun openAiCompatibleParserReadsOpenRouterChoices() {
+        val text = LlmResponseParser.openAiText("""{"choices":[{"message":{"content":"hello"}}]}""")
+        assertEquals("hello", text)
+    }
+
+    @Test
+    fun openAiCompatibleParserExplainsErrorPayloadWithoutChoices() {
+        val error = runCatching {
+            LlmResponseParser.openAiText("""{"error":{"code":"rate_limit_exceeded","message":"额度已用尽"}}""")
+        }.exceptionOrNull()
+        assertTrue(error?.message?.contains("rate_limit_exceeded") == true)
+        assertTrue(error?.message?.contains("额度已用尽") == true)
+    }
+
+    @Test
+    fun openAiCompatibleParserRejectsEmptyChoicesAndMalformedBodyClearly() {
+        val empty = runCatching { LlmResponseParser.openAiText("""{"choices":[]}""") }.exceptionOrNull()
+        val malformed = runCatching { LlmResponseParser.openAiText("not-json") }.exceptionOrNull()
+        assertTrue(empty?.message?.contains("空 choices") == true)
+        assertTrue(malformed?.message?.contains("无法解析") == true)
+    }
+
+    @Test
+    fun cloudJsonParserAcceptsFencedObjectAndRejectsInvalidJson() {
+        val parsed = CloudJsonResponseParser.extractObject("```json\n{\"valuesCandidate\":\"长期方向候选\"}\n```")
+        assertNotNull(parsed)
+        val invalid = runCatching { CloudJsonResponseParser.extractObject("{\"x\":}") }.exceptionOrNull()
+        assertNotNull(invalid)
     }
 
     @Test

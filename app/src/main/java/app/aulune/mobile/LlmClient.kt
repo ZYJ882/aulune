@@ -3,6 +3,8 @@ package app.aulune.mobile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -18,6 +20,45 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 data class RemoteModel(val id: String, val label: String = id)
+
+internal object LlmResponseParser {
+    fun openAiText(payload: String): String {
+        val json = parseObject(payload, "OpenAI 兼容接口返回了无法解析的响应。")
+        val choices = json["choices"]?.jsonArray
+            ?: throw IOException("OpenAI 兼容接口未返回 choices：${errorDetail(json)}")
+        if (choices.isEmpty()) throw IOException("OpenAI 兼容接口返回了空 choices：${errorDetail(json)}")
+        val message = choices.firstOrNull()?.jsonObject?.get("message")?.jsonObject
+            ?: throw IOException("OpenAI 兼容接口的 choices 缺少 message。")
+        val content = message["content"]
+        val text = when (content) {
+            is kotlinx.serialization.json.JsonPrimitive -> content.contentOrNull.orEmpty()
+            is JsonArray -> content.joinToString("") { part ->
+                val item = part.jsonObject
+                if (item["type"]?.jsonPrimitive?.contentOrNull == "text") item["text"]?.jsonPrimitive?.contentOrNull.orEmpty() else ""
+            }
+            else -> ""
+        }.trim()
+        return text.ifBlank { throw IOException("模型返回了空内容。") }
+    }
+
+    fun errorDetail(payload: String): String = errorDetail(parseObject(payload, ""))
+
+    private fun errorDetail(payload: JsonObject): String {
+        val error = payload["error"]?.jsonObject
+        val message = error?.get("message")?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            .ifBlank { payload["message"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty() }
+        val code = error?.get("code")?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        return listOf(code.takeIf { it.isNotBlank() }, message.takeIf { it.isNotBlank() })
+            .filterNotNull()
+            .joinToString("：")
+            .ifBlank { "服务商未提供错误详情，请检查 API Key、模型、限额或接口地址。" }
+            .take(360)
+    }
+
+    private fun parseObject(payload: String, message: String): JsonObject = runCatching {
+        Json.parseToJsonElement(payload).jsonObject
+    }.getOrElse { throw IOException(message.ifBlank { "接口返回了无法解析的错误响应。" }) }
+}
 
 internal object LlmProtocolSupport {
     fun endpointUrl(base: String, suffix: String): String {
@@ -115,8 +156,7 @@ class LlmClient {
         val request = baseRequest(chatUrl(settings.effectiveBaseUrl(provider)), payload)
             .header("Authorization", "Bearer ${settings.apiKey.trim()}")
             .build()
-        return JSONObject(execute(request)).getJSONArray("choices").getJSONObject(0)
-            .getJSONObject("message").optString("content").ifBlank { "模型没有返回可显示的文本。" }
+        return LlmResponseParser.openAiText(execute(request))
     }
 
     private fun callAnthropic(provider: AiProvider, settings: ProviderSettings, model: String, messages: List<ConversationMessage>): String {
@@ -190,7 +230,11 @@ class LlmClient {
 
     private fun execute(request: Request): String = client.newCall(request).execute().use { response ->
         val body = response.body?.string().orEmpty()
-        if (!response.isSuccessful) throw IOException("${response.code}：${body.take(360).ifBlank { response.message }}")
+        if (!response.isSuccessful) {
+            val detail = runCatching { LlmResponseParser.errorDetail(body) }.getOrDefault(body.take(180))
+            throw IOException("HTTP ${response.code}：$detail")
+        }
+        if (body.isBlank()) throw IOException("接口返回了空响应。")
         body
     }
 

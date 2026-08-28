@@ -1,5 +1,8 @@
 package app.aulune.mobile
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -53,6 +56,7 @@ import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -65,6 +69,8 @@ import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -1221,7 +1227,8 @@ private fun TalkScreen(
     val isGenerating by conversationViewModel.isGenerating.collectAsState()
     val status by conversationViewModel.status.collectAsState()
     val activeSettings = store.settingsFor(store.selectedProvider)
-    val haptic = HapticFeedback(LocalContext.current)
+    val context = LocalContext.current
+    val haptic = HapticFeedback(context)
 
     LaunchedEffect(messages.size, isGenerating) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
@@ -1272,7 +1279,14 @@ private fun TalkScreen(
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(messages, key = { it.id }) { message -> MessageBubble(message) }
+            items(messages, key = { it.id }) { message ->
+                MessageBubble(message) { text ->
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Aulune 对话", text))
+                    conversationViewModel.showStatus("已复制消息内容")
+                    haptic.confirm()
+                }
+            }
             if (isGenerating) item { ThinkingBubble(store.selectedProvider.displayName) }
         }
         // Pixel Messages 风格悬浮胶囊输入框
@@ -1353,7 +1367,7 @@ private fun ProviderBar(
 }
 
 @Composable
-private fun MessageBubble(message: ConversationMessage) {
+private fun MessageBubble(message: ConversationMessage, onCopy: (String) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.fromUser) Arrangement.End else Arrangement.Start) {
         Column(horizontalAlignment = if (message.fromUser) Alignment.End else Alignment.Start, modifier = Modifier.fillMaxWidth(0.85f)) {
             Surface(
@@ -1373,8 +1387,19 @@ private fun MessageBubble(message: ConversationMessage) {
                     lineHeight = 20.sp,
                 )
             }
-            Spacer(Modifier.height(4.dp))
-            Text(message.time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(message.time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(4.dp))
+                TextButton(
+                    onClick = { onCopy(message.text) },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = "复制消息", modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("复制", style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }
@@ -1588,6 +1613,7 @@ private fun ModelConfigCard(
 ) {
     val scope = rememberCoroutineScope()
     var apiKey by rememberSaveable(provider) { mutableStateOf(store.settingsFor(provider).apiKey) }
+    var isApiKeyVisible by rememberSaveable(provider) { mutableStateOf(false) }
     var model by rememberSaveable(provider) { mutableStateOf(store.settingsFor(provider).effectiveModel(provider)) }
     var baseUrl by rememberSaveable(provider) { mutableStateOf(store.settingsFor(provider).effectiveBaseUrl(provider)) }
     var modelStatus by rememberSaveable(provider) { mutableStateOf("可手动填写模型名，或用 API Key 获取列表。") }
@@ -1622,7 +1648,15 @@ private fun ModelConfigCard(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (isApiKeyVisible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { isApiKeyVisible = !isApiKeyVisible }) {
+                    Icon(
+                        imageVector = if (isApiKeyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                        contentDescription = if (isApiKeyVisible) "隐藏 API Key" else "显示 API Key",
+                    )
+                }
+            },
         )
         OutlinedTextField(
             value = baseUrl, onValueChange = {

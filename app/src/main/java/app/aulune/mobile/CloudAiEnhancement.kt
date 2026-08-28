@@ -3,7 +3,11 @@ package app.aulune.mobile
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /** 仅保存用户主动启用的云端增强配置；Key 由 Android Keystore 保护。 */
 data class CloudAiConfig(
@@ -91,6 +95,27 @@ data class CloudProfileAnalysis(
     val coreCandidate: String
 )
 
+internal object CloudJsonResponseParser {
+    fun extractObject(text: String): JsonObject {
+        val trimmed = text.trim()
+            .removePrefix("```json")
+            .removePrefix("```JSON")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        val start = trimmed.indexOf('{')
+        val end = trimmed.lastIndexOf('}')
+        require(start >= 0 && end > start) { "云端模型未返回可解析 JSON。" }
+        val candidate = trimmed.substring(start, end + 1)
+        return runCatching { Json.parseToJsonElement(candidate).jsonObject }.getOrElse {
+            throw IllegalArgumentException("云端模型返回的 JSON 格式无效。")
+        }
+    }
+
+    fun stringValue(payload: JsonObject, key: String): String =
+        payload[key]?.jsonPrimitive?.contentOrNull.orEmpty()
+}
+
 /** 只在用户明确点击后挑选近期、可见且尚未经过云端整理的内容。 */
 internal object CloudManualOrganizePolicy {
     const val DefaultBatchLimit = 5
@@ -123,12 +148,12 @@ class CloudAiSemanticService(private val client: LlmClient = LlmClient()) {
         )
         return client.generate(config.provider, config.providerSettings(), messages)
             .mapCatching { text ->
-                val payload = JSONObject(extractJson(text))
+                val payload = CloudJsonResponseParser.extractObject(text)
                 CloudContentAnalysis(
-                    theme = payload.optString("theme").trim().take(48).ifBlank { item.theme },
-                    topicGroup = payload.optString("topicGroup").trim().take(16).ifBlank { item.topicGroup },
-                    seriesKey = payload.optString("seriesKey").trim().take(64),
-                    insight = payload.optString("insight").trim().take(80)
+                    theme = CloudJsonResponseParser.stringValue(payload, "theme").trim().take(48).ifBlank { item.theme },
+                    topicGroup = CloudJsonResponseParser.stringValue(payload, "topicGroup").trim().take(16).ifBlank { item.topicGroup },
+                    seriesKey = CloudJsonResponseParser.stringValue(payload, "seriesKey").trim().take(64),
+                    insight = CloudJsonResponseParser.stringValue(payload, "insight").trim().take(80)
                 )
             }
     }
@@ -150,19 +175,12 @@ class CloudAiSemanticService(private val client: LlmClient = LlmClient()) {
         )
         return client.generate(config.provider, config.providerSettings(), messages)
             .mapCatching { text ->
-                val payload = JSONObject(extractJson(text))
+                val payload = CloudJsonResponseParser.extractObject(text)
                 CloudProfileAnalysis(
-                    valuesCandidate = payload.optString("valuesCandidate").trim().take(120),
-                    coreCandidate = payload.optString("coreCandidate").trim().take(120)
+                    valuesCandidate = CloudJsonResponseParser.stringValue(payload, "valuesCandidate").trim().take(120),
+                    coreCandidate = CloudJsonResponseParser.stringValue(payload, "coreCandidate").trim().take(120)
                 )
             }
     }
 
-    private fun extractJson(text: String): String {
-        val trimmed = text.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-        val start = trimmed.indexOf('{')
-        val end = trimmed.lastIndexOf('}')
-        require(start >= 0 && end > start) { "云端模型未返回可解析 JSON。" }
-        return trimmed.substring(start, end + 1)
-    }
 }
