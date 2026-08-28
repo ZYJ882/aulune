@@ -51,6 +51,7 @@ Aulune 使用 **Kotlin、Jetpack Compose 与 Material 3** 独立实现，应用�
 
 | 版本 | 主要内容 | APK |
 |---|---|---|
+| `v1.8.7` | 内容库、对话、画像直达操作优化；云端配置安全修复。临时 Debug 签名，安装前需卸载既有正式版 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v1.8.7) |
 | `v0.6.0` | 更新为“画像核心、汇入信息流与 AI 生长轨迹”图标 | [Aulune-v0.6.0.apk](releases/v0.6.0/Aulune-v0.6.0.apk) |
 | `v0.5.0` | 独立简约启动器图标 | [Aulune-v0.5.0.apk](releases/v0.5.0/Aulune-v0.5.0.apk) |
 | `v0.4.0` | 四方式官方认证引导入口 | [Aulune-v0.4.0.apk](releases/v0.4.0/Aulune-v0.4.0.apk) |
