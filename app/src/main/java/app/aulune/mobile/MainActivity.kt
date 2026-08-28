@@ -1143,39 +1143,53 @@ private fun AgentCognitiveCard(
 ) {
     val colors = MaterialTheme.colorScheme
     Card(
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = colors.primaryContainer.copy(alpha = 0.42f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("本地 Agent 认知闭环", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
                     Text("${run.phase.label} · 点击前不联网", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
                 }
             }
-            Text(snapshot.summary, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, lineHeight = 22.sp)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                snapshot.summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant,
+                lineHeight = 23.sp,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 snapshot.layers.forEach { layer ->
-                    Row(
-                        modifier = Modifier.padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text(layer.name, style = MaterialTheme.typography.labelMedium, color = colors.primary, modifier = Modifier.width(112.dp), lineHeight = 20.sp)
-                        Text(layer.description, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f), lineHeight = 20.sp)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(layer.name, style = MaterialTheme.typography.labelMedium, color = colors.primary)
+                        Text(
+                            layer.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            lineHeight = 21.sp,
+                        )
                     }
                 }
             }
             if (snapshot.pendingConfirmations > 0) {
-                Text("有 ${snapshot.pendingConfirmations} 个候选需要在下方确认或拒绝；候选不会自动变成你的长期画像。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 20.sp)
+                Text(
+                    "有 ${snapshot.pendingConfirmations} 个候选需要在下方确认或拒绝；候选不会自动变成你的长期画像。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    lineHeight = 21.sp,
+                )
             }
             Button(
                 onClick = onRun,
                 enabled = run.phase != AgentRunPhase.Synthesizing,
-
                 shape = RoundedCornerShape(28.dp),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
@@ -1183,19 +1197,22 @@ private fun AgentCognitiveCard(
                     CircularProgressIndicator(Modifier.size(18.dp), color = colors.onPrimary, strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
                 }
-                Text(if (run.phase == AgentRunPhase.Synthesizing) "正在运行本机认知…" else "运行一次本机 Agent 认知", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (run.phase == AgentRunPhase.Synthesizing) "正在运行本机认知…" else "运行一次本机 Agent 认知",
+                    style = MaterialTheme.typography.labelLarge,
+                )
             }
             if (cloudEnabled) {
                 OutlinedButton(
                     onClick = onCloud,
                     enabled = run.phase != AgentRunPhase.Synthesizing,
                     shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
                 ) {
                     Text("用已启用模型增强画像候选", style = MaterialTheme.typography.labelMedium)
                 }
             }
-            Text(run.notice, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 20.sp)
+            Text(run.notice, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 21.sp)
         }
     }
 }
