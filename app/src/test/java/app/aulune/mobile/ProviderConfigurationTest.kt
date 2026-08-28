@@ -121,6 +121,18 @@ class ProviderConfigurationTest {
     }
 
     @Test
+    fun cloudJsonParserAcceptsCommonModelFormattingVariants() {
+        val fenced = CloudJsonResponseParser.extractObject("""说明文字
+```json
+{"valuesCandidate":"方向",}
+```
+""")
+        val loose = CloudJsonResponseParser.extractObject("""结果：{'valuesCandidate':'方向','coreCandidate':'边界',}""")
+        assertNotNull(fenced)
+        assertNotNull(loose)
+    }
+
+    @Test
     fun cloudJsonParserAcceptsFencedObjectAndRejectsInvalidJson() {
         val parsed = CloudJsonResponseParser.extractObject("```json\n{\"valuesCandidate\":\"长期方向候选\"}\n```")
         assertNotNull(parsed)

@@ -97,19 +97,45 @@ data class CloudProfileAnalysis(
 
 internal object CloudJsonResponseParser {
     fun extractObject(text: String): JsonObject {
-        val trimmed = text.trim()
-            .removePrefix("```json")
-            .removePrefix("```JSON")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
-        val start = trimmed.indexOf('{')
-        val end = trimmed.lastIndexOf('}')
-        require(start >= 0 && end > start) { "云端模型未返回可解析 JSON。" }
-        val candidate = trimmed.substring(start, end + 1)
-        return runCatching { Json.parseToJsonElement(candidate).jsonObject }.getOrElse {
-            throw IllegalArgumentException("云端模型返回的 JSON 格式无效。")
+        val candidate = balancedObject(text)
+            .replace('“', '"')
+            .replace('”', '"')
+            .replace('‘', '\'')
+            .replace('’', '\'')
+        val variants = listOf(
+            candidate,
+            candidate.replace(Regex(",\\s*([}])"), "$1"),
+            candidate.replace(Regex("'([^']*)'\\s*:"), "\\\"$1\\\":").replace(Regex(":\\s*'([^']*)'"), ":\\\"$1\\\"")
+                .replace(Regex(",\\s*([}])"), "$1"),
+            candidate.replace(Regex("([,{]\\s*)([A-Za-z][A-Za-z0-9_]*)\\s*:"), "$1\\\"$2\\\":")
+                .replace(Regex(",\\s*([}])"), "$1")
+        )
+        variants.firstNotNullOfOrNull { value ->
+            runCatching { Json.parseToJsonElement(value).jsonObject }.getOrNull()
+        }?.let { return it }
+        throw IllegalArgumentException("云端模型返回的 JSON 格式无效；请重试或更换支持结构化输出的模型。")
+    }
+
+    private fun balancedObject(text: String): String {
+        val start = text.indexOf('{')
+        require(start >= 0) { "云端模型未返回可解析 JSON。" }
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        for (index in start until text.length) {
+            val char = text[index]
+            if (quoted) {
+                if (escaped) escaped = false else if (char == '\\') escaped = true else if (char == '"') quoted = false
+            } else when (char) {
+                '"' -> quoted = true
+                '{' -> depth += 1
+                '}' -> {
+                    depth -= 1
+                    if (depth == 0) return text.substring(start, index + 1)
+                }
+            }
         }
+        throw IllegalArgumentException("云端模型未返回完整 JSON 对象。")
     }
 
     fun stringValue(payload: JsonObject, key: String): String =
