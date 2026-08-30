@@ -47,16 +47,17 @@ Aulune 使用 **Kotlin、Jetpack Compose 与 Material 3** 独立实现，应用�
 
 ## 版本下载
 
-每个版本的 APK 既作为独立 GitHub Release 资产发布，也在仓库 `releases/` 目录保留副本。请优先从 Release 页面下载安装。
+每个版本的 APK 作为独立 GitHub Release 资产发布；仓库源码不保留构建产物，请优先从 [Releases 页面](https://github.com/ZYJ882/aulune/releases) 下载安装。
 
 | 版本 | 主要内容 | APK |
 |---|---|---|
+| `v1.9.6` | Gemini 画像候选 JSON 模式与诊断日志查看器 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v1.9.6) |
 | `v1.8.7` | 内容库、对话、画像直达操作优化；云端配置安全修复。临时 Debug 签名，安装前需卸载既有正式版 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v1.8.7) |
-| `v0.6.0` | 更新为“画像核心、汇入信息流与 AI 生长轨迹”图标 | [Aulune-v0.6.0.apk](releases/v0.6.0/Aulune-v0.6.0.apk) |
-| `v0.5.0` | 独立简约启动器图标 | [Aulune-v0.5.0.apk](releases/v0.5.0/Aulune-v0.5.0.apk) |
-| `v0.4.0` | 四方式官方认证引导入口 | [Aulune-v0.4.0.apk](releases/v0.4.0/Aulune-v0.4.0.apk) |
-| `v0.3.0` | 官方网页账号管理入口 | [Aulune-v0.3.0.apk](releases/v0.3.0/Aulune-v0.3.0.apk) |
-| `v0.2.0` | OpenAI、Claude、Gemini、DeepSeek 多模型配置与文本对话 | [Aulune-v0.2.0.apk](releases/v0.2.0/Aulune-v0.2.0.apk) |
+| `v0.6.0` | 更新为“画像核心、汇入信息流与 AI 生长轨迹”图标 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.6.0) |
+| `v0.5.0` | 独立简约启动器图标 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.5.0) |
+| `v0.4.0` | 四方式官方认证引导入口 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.4.0) |
+| `v0.3.0` | 官方网页账号管理入口 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.3.0) |
+| `v0.2.0` | OpenAI、Claude、Gemini、DeepSeek 多模型配置与文本对话 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.2.0) |
 
 
 ## 安全与数据边界
@@ -87,16 +88,16 @@ GitHub Release 中的 APK 使用 Aulune 固定签名密钥构建。安装固定�
 ```text
 aulune/
 ├── app/src/main/java/app/aulune/mobile/
-│   ├── MainActivity.kt             # Compose 主界面、导航和交互
-│   ├── AppData.kt                  # 本地状态、模型配置与离线内容
-│   ├── LlmClient.kt                # 可编辑端点的多协议模型调用与目录解析
-│   ├── BackgroundDiscovery.kt      # 仅手动触发的来源探测和任务账本模型
-│   ├── BilibiliLoginActivity.kt    # 四方式认证入口的 Compose 引导页
-│   └── BilibiliWebActivity.kt      # 受控官方网页账号管理容器
-├── assets/                          # 独立品牌图标源图
-├── docs/model-providers.md         # 多服务商协议、端点与官方资料
-├── docs/releases/                  # 各版本发布说明
-├── releases/                        # 各版本 APK 副本
+│   ├── MainActivity.kt              # Compose 主界面、导航和交互
+│   ├── AppData.kt                   # 本地状态、模型配置与离线内容
+│   ├── LlmClient.kt                 # 可编辑端点的多协议模型调用与目录解析
+│   ├── BackgroundDiscovery.kt       # 仅手动触发的来源探测和任务账本模型
+│   ├── BilibiliLoginActivity.kt     # 认证入口的 Compose 引导页
+│   └── BilibiliWebActivity.kt       # 受控官方网页账号管理容器
+├── assets/                           # 品牌图标源图
+├── docs/model-providers.md          # 多服务商协议、端点与官方资料
+├── docs/releases/                   # 各版本发布说明
+├── historical/v0.2.0/               # 早期源码归档，不参与当前构建
 ├── PROJECT_SCOPE.md                 # 参考来源、功能映射和未实现边界
 └── CHANGELOG.md                     # 版本变更记录
 ```
