@@ -53,21 +53,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
@@ -135,13 +141,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.togetherWith
+import android.net.Uri
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // v2.0.0 初始化后台发现通知 channel（即使用户没开开关也提前建好，开关打开后立即生效）
+        BackgroundDiscoveryWorkManager.ensureChannel(this)
         setContent {
             val themeMode = ThemeManager.getMode(this).let { remember { mutableStateOf(it) } }
             val dynamicColor = ThemeManager.isDynamicColorEnabled(this).let { remember { mutableStateOf(it) } }
@@ -430,7 +440,25 @@ private fun FocusScreen(viewModel: LocalFeedViewModel) {
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Text("${localState.items.size} 条", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("${localState.items.size} 条", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(
+                        onClick = { viewModel.reshuffleFeed(); haptic.click() },
+                        enabled = localState.items.isNotEmpty() && !localState.isReshuffling,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    ) {
+                        if (localState.isReshuffling) {
+                            CircularProgressIndicator(Modifier.size(14.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
+                            Spacer(Modifier.width(6.dp))
+                            Text("换一批", style = MaterialTheme.typography.labelMedium)
+                        } else {
+                            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("换一批", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
             }
         }
         if (localState.items.isEmpty()) {
@@ -780,6 +808,147 @@ private fun InterestHypothesisCard(
     }
 }
 
+/**
+ * v2.0.0 避雷探针卡片：和兴趣候选对称的负向候选。
+ * 用户确认"避开"后，本机规则会把这些主题/作者/系列在排序时大幅降权。
+ */
+@Composable
+private fun AvoidanceHypothesisCard(
+    avoidance: List<AvoidanceHypothesisUi>,
+    onDecision: (String, AvoidanceHypothesisStatus) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Block, contentDescription = null, tint = colors.tertiary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("避雷候选", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                Spacer(Modifier.weight(1f))
+                Text("确认后才写入过滤偏好", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+            }
+            val pending = avoidance.filter { it.status == AvoidanceHypothesisStatus.Pending }
+            if (pending.isEmpty()) {
+                Text(
+                    "尚无待确认避雷候选。当你对某些主题、作者或系列反复给负反馈后，这里会主动询问你是否要长期避开。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    lineHeight = 18.sp,
+                )
+            } else {
+                pending.take(3).forEach { hypothesis ->
+                    Surface(color = colors.errorContainer.copy(alpha = 0.4f), shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(hypothesis.candidatePattern, style = MaterialTheme.typography.labelLarge, color = colors.onSurface)
+                            Text("${hypothesis.originLabel} · ${hypothesis.evidenceCount} 条证据", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                            Text(hypothesis.reason, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 16.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                TextButton(onClick = { onDecision(hypothesis.id, AvoidanceHypothesisStatus.Avoiding) }) {
+                                    Text("确认避开", style = MaterialTheme.typography.labelSmall)
+                                }
+                                TextButton(onClick = { onDecision(hypothesis.id, AvoidanceHypothesisStatus.Tolerable) }) {
+                                    Text("暂可接受", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                "避雷候选不会自动屏蔽内容；只会影响排序权重，且支持随时通过重新观察恢复。",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * v2.0.0 心理学画像卡片：MBTI / 认知风格 / 深层需求 / 人格素描
+ * 对齐 OpenBiliClaw 灵魂引擎四维度。
+ */
+@Composable
+private fun PsychologicalProfileCard(
+    profiles: List<PsychologicalProfileUi>,
+    onConfirm: (PsychologicalDimension) -> Unit,
+    onReset: (PsychologicalDimension) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Psychology, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("灵魂画像", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onRefresh, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                    Text("刷新候选", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+            if (profiles.isEmpty()) {
+                Text(
+                    "持续使用信息流后，本机行为会桥接出 MBTI 推断、认知风格、深层需求和人格素描候选。" +
+                        "候选均不会自动写入画像，需你确认；云端 AI 配置后可生成更精准的候选。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    lineHeight = 18.sp,
+                )
+            } else {
+                PsychologicalDimension.entries.forEach { dimension ->
+                    val profile = profiles.firstOrNull { it.dimension == dimension }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(dimension.label, style = MaterialTheme.typography.labelMedium, color = colors.primary)
+                        if (profile == null) {
+                            Text("尚未生成候选；继续使用后会自动出现。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                        } else {
+                            if (profile.summary.isNotBlank()) {
+                                Text(profile.summary, style = MaterialTheme.typography.bodyMedium, color = colors.onSurface, fontWeight = FontWeight.Medium)
+                                if (profile.detail.isNotBlank()) {
+                                    Text(profile.detail, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 18.sp)
+                                }
+                            }
+                            if (profile.hasCandidate) {
+                                Surface(color = colors.primaryContainer, shape = RoundedCornerShape(12.dp)) {
+                                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text("候选：${profile.candidate}", style = MaterialTheme.typography.labelMedium, color = colors.onPrimaryContainer)
+                                        if (profile.candidateDetail.isNotBlank()) {
+                                            Text(profile.candidateDetail, style = MaterialTheme.typography.bodySmall, color = colors.onPrimaryContainer, lineHeight = 16.sp)
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            TextButton(onClick = { onConfirm(dimension) }) {
+                                                Text("确认写入", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                            TextButton(onClick = { onReset(dimension) }) {
+                                                Text("重新观察", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (profile.summary.isBlank()) {
+                                Text("等待新候选生成。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                "心理学画像仅基于本机行为桥接，不会上传对话原文或原始观看记录。",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 internal fun BackgroundDiscoveryCard(
     state: BackgroundDiscoveryUiState,
@@ -935,6 +1104,7 @@ private fun LibraryScreen(
                 StatusPill("稍后 ${state.totalSaved}")
                 StatusPill("标记 ${state.totalMarked}")
                 StatusPill("隐藏 ${state.totalHidden}")
+                StatusPill("已移除(30d) ${state.totalRemoved}")
             }
         }
         if (state.items.isEmpty()) {
@@ -1084,6 +1254,22 @@ private fun CompassScreen(
             InterestHypothesisCard(
                 hypotheses = localState.hypotheses,
                 onDecision = viewModel::decideInterestHypothesis,
+            )
+        }
+        // v2.0.0 避雷探针卡片
+        item {
+            AvoidanceHypothesisCard(
+                avoidance = localState.avoidance,
+                onDecision = viewModel::decideAvoidance,
+            )
+        }
+        // v2.0.0 心理学画像卡片（MBTI / 认知风格 / 深层需求 / 人格素描）
+        item {
+            PsychologicalProfileCard(
+                profiles = localState.psychological,
+                onConfirm = viewModel::confirmPsychologicalProfile,
+                onReset = viewModel::resetPsychologicalProfile,
+                onRefresh = viewModel::refreshPsychological,
             )
         }
         // 行为层
@@ -1256,7 +1442,11 @@ private fun TalkScreen(
 
     fun submit() {
         if (draft.isBlank() || isGenerating) return
-        conversationViewModel.send(draft, store.selectedProvider, activeSettings, client)
+        // v2.0.0 failover chain：把所有已配置 Key 的 providers 作为备选
+        val failoverAlternatives = store.providerSettings.entries
+            .filter { it.key != store.selectedProvider && it.value.apiKey.isNotBlank() }
+            .map { it.key to it.value }
+        conversationViewModel.send(draft, store.selectedProvider, activeSettings, client, failoverAlternatives)
         draft = ""
         haptic.confirm()
     }
@@ -1438,6 +1628,11 @@ private fun ThinkingBubble(provider: String) {
 // ═══════════════════════════════════════════════════════════════
 //  设置页（模型工作台 + 外观）
 // ═══════════════════════════════════════════════════════════════
+//  v2.0.0 备份卡片共享状态（导出/导入操作结果）
+// ═══════════════════════════════════════════════════════════════
+
+private val pendingBackupStatus = mutableStateOf("")
+private val pendingImportPreview = mutableStateOf<Pair<BackupManager.ImportResult, Uri>?>(null)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1529,6 +1724,56 @@ private fun SettingsScreen(
                 }
             }
         }
+        // v2.0.0 后台主动发现开关
+        item {
+            val context = LocalContext.current
+            val discoveryEnabled = remember { mutableStateOf(BackgroundDiscoveryWorkManager.isEnabled(context)) }
+            val intervalHours = remember { mutableStateOf(BackgroundDiscoveryWorkManager.getIntervalHours(context)) }
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("后台主动发现", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                            Text("开启后，Aulune 会每 ${intervalHours.value} 小时主动按本机画像探索 ${ContentPlatform.entries.size} 个平台，发现匹配的惊喜内容时发本地通知。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = discoveryEnabled.value,
+                            onCheckedChange = { enabled ->
+                                BackgroundDiscoveryWorkManager.setEnabled(context, enabled)
+                                discoveryEnabled.value = enabled
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = MaterialTheme.colorScheme.primary),
+                        )
+                    }
+                    if (discoveryEnabled.value) {
+                        Text("运行间隔", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(1L, 3L, 6L, 12L).forEach { h ->
+                                FilterChip(
+                                    selected = intervalHours.value == h,
+                                    onClick = {
+                                        BackgroundDiscoveryWorkManager.setIntervalHours(context, h)
+                                        intervalHours.value = h
+                                    },
+                                    label = { Text("${h}h", style = MaterialTheme.typography.labelMedium) },
+                                )
+                            }
+                        }
+                        Text(
+                            "下一次发现：写入候选到本机内容库，并通过本地通知提醒（Android 13+ 需授予通知权限）。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
         // 模型工作台
         item {
             Card(
@@ -1572,6 +1817,10 @@ private fun SettingsScreen(
                 }
             }
         }
+        // v2.0.0 跨机器迁移 · 备份导出/导入
+        item {
+            BackupCard()
+        }
         item {
             Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(20.dp)) {
                 Text(
@@ -1590,6 +1839,154 @@ private fun SettingsScreen(
             onDismiss = { showLogs = false },
         )
     }
+}
+
+@Composable
+private fun BackupCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val colors = MaterialTheme.colorScheme
+
+    // SAF launcher：导出文件名用户可改
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = BackupManager.export(context, uri)
+                if (result.success) {
+                    pendingBackupStatus.value = "已导出 ${result.tableCounts.values.sum()} 条记录 / ${BackupManager.formatBytes(result.bytesWritten)} 至 ${uri.lastPathSegment}"
+                } else {
+                    pendingBackupStatus.value = "导出失败：${result.errorMessage}"
+                }
+            }
+        }
+    }
+
+    // SAF launcher：选择导入文件
+    val openDocumentLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val validate = BackupManager.validate(context, uri)
+                if (!validate.success) {
+                    pendingBackupStatus.value = "文件校验失败：${validate.errorMessage}"
+                    return@launch
+                }
+                pendingImportPreview.value = validate to uri
+            }
+        }
+    }
+
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.CloudSync, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("跨机器迁移", style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                    Text("导出本机全部数据到 .obcbackup 文件，在新设备上导入即可继续；不含 API Key、Cookie 或令牌。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, lineHeight = 16.sp)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { createDocumentLauncher.launch(BackupManager.generateFileName()) },
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
+                ) {
+                    Icon(Icons.Outlined.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("导出备份", style = MaterialTheme.typography.labelLarge)
+                }
+                Button(
+                    onClick = { openDocumentLauncher.launch(arrayOf("application/octet-stream", "application/json", "*/*")) },
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
+                ) {
+                    Icon(Icons.Outlined.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("导入备份", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+            pendingBackupStatus.value.takeIf { it.isNotBlank() }?.let { status ->
+                Surface(color = colors.secondaryContainer, shape = RoundedCornerShape(12.dp)) {
+                    Text(status, style = MaterialTheme.typography.bodySmall, color = colors.onSecondaryContainer, modifier = Modifier.padding(10.dp), lineHeight = 16.sp)
+                }
+            }
+            Text(
+                "格式：aulune-backup-YYYYMMDD-HHmmss.obcbackup · 版本 v1 · 含 13 张表（内容 / 行为 / 兴趣 / 反馈 / 画像 / 偏好 / 对话 / 候选 / 避雷 / 心理 / 已看账本 / 发现任务 / 来源可用性）",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                lineHeight = 14.sp,
+            )
+        }
+    }
+
+    // 导入前预览 + 二次确认对话框
+    pendingImportPreview.value?.let { (preview, uri) ->
+        ImportConfirmDialog(
+            preview = preview,
+            onConfirm = {
+                scope.launch {
+                    val result = BackupManager.import(context, uri)
+                    pendingBackupStatus.value = if (result.success) {
+                        "导入成功：${result.tableCounts.values.sum()} 条记录（来自 ${result.sourceDevice} · ${BackupManager.formatTimestamp(result.sourceCreatedAt)}）"
+                    } else {
+                        "导入失败：${result.errorMessage}"
+                    }
+                }
+                pendingImportPreview.value = null
+            },
+            onDismiss = { pendingImportPreview.value = null },
+        )
+    }
+}
+
+@Composable
+private fun ImportConfirmDialog(
+    preview: BackupManager.ImportResult,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("导入备份前确认") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("来源设备：${preview.sourceDevice.ifBlank { "未知" }}", style = MaterialTheme.typography.bodyMedium)
+                Text("备份时间：${BackupManager.formatTimestamp(preview.sourceCreatedAt)}", style = MaterialTheme.typography.bodyMedium)
+                Text("应用版本：${preview.sourceAppVersion}", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(4.dp))
+                Text("包含数据：", style = MaterialTheme.typography.labelLarge)
+                preview.tableCounts.forEach { (table, count) ->
+                    Text("  · $table: $count 条", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(8.dp))
+                Surface(color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp)) {
+                    Text(
+                        "⚠️ 导入会清空当前设备上的全部本机数据，然后从备份恢复。此操作不可撤销。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(10.dp),
+                        lineHeight = 16.sp,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                Text("确认清空并导入")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable

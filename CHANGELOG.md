@@ -1,5 +1,93 @@
 # Aulune Android 更新记录
 
+## v2.0.0-dev — 本机补全 OpenBiliClaw 核心能力（首轮 + 次轮）
+
+v2.0.0-dev 在 v1.9.6 基础上本机补全 OpenBiliClaw 的"先理解你 → 主动跨平台发现"闭环。**纯 Android 原生，不依赖外部后端**。
+
+### 第一轮 · 理解你 + 对话
+
+**避雷探针**：和兴趣探针对称的负向候选。当用户对某些主题、作者或系列反复给负反馈（≥2 次）后，应用主动询问是否长期避开；确认后写入过滤偏好，影响排序权重但不直接屏蔽内容。避雷候选支持四态：Pending / Avoiding / Tolerable / Expired。
+
+**心理学画像（灵魂引擎四维度）**：对齐 OpenBiliClaw 灵魂引擎。本机行为桥接生成 4 维度候选：
+- MBTI 推断（INTP-A 等格式 + 置信度）
+- 认知风格（结构化 / 直觉型 / 实验型 / 综合型）
+- 深层需求（好奇心 / 系统理解 / 自我表达 / 成就感 / 归属感 …）
+- 人格素描（自然语言描述）
+
+候选不会自动写入画像，需用户确认；云端 AI 配置后可生成更精准的候选。
+
+**兴趣探针心理学桥接扩展**：从 v1.9.6 的 7 条跨主题桥接扩展到 19 条，覆盖技术/商业/学习/创造/生活/娱乐/哲学/音乐 8 个维度，例如 "技术 · AI" → "学习 · 哲学"、"商业 · 产品" → "学习 · 心理学"。
+
+**"换一批" 三层去重**：v1.9.6 的 `rotateFeed()` 只是空操作。v2.0.0 实现真正的三层去重：
+- 第一层：当前批（VM 内存 items.contentKey）
+- 第二层：本会话已看（sessionViewedKeys StateFlow）
+- 第三层：30 天持久化账本（`local_viewed_ledger` 表，Room Migration v8→v9）
+
+**30 天历史"已移除"分类**：内容库从 4 个 tab 扩到 5 个（Saved / Marked / Recent / Hidden / Removed）。"已移除"按近 30 天 cutoff 显示隐藏内容，超 30 天自动从账本清理但不从源头删除。
+
+**流式 SSE 输出**：`LlmClient.generateStream()` 返回 `Flow<String>`，OpenAI 兼容协议走 SSE 逐 token 输出；Claude / Gemini 自动回退到 `generate()` 一次性返回。对话页等待体验从"30 秒空白"变为"打字机式渐进显示"。
+
+**durable turn_id**：`LocalChatMessageEntity` 加 `turnId` 字段，每轮 user+assistant 共享同一个 UUID。即使重试或切换 provider，也能用 turnId 找回该轮的完整上下文。Room Migration v9→v10。
+
+**LLM failover chain**：`LlmClient.generateWithFailover()` 按顺序尝试主 provider + 备选 providers，第一个成功即返回。`TalkScreen.submit()` 自动收集所有已配置 Key 的 providers 作为备选；主 provider 失败时自动切换。
+
+**苏格拉底式追问 prompt**：升级 system prompt 为 7 条原则的苏格拉底式追问，不直接给结论，通过反问帮用户发现自己的偏好与思考路径。
+
+### 第二轮 · 多平台真实 connector + WorkManager 后台主动发现 + 跨机器迁移
+
+**YouTube connector 重写**：从 v1.9.6 的 12 个硬编码 video ID + oEmbed（30 天不会更新）改为 8 个高活跃频道 RSS feed（Kurzgesagt / Vsauce / Vox / Y Combinator / The Futur / Marques Brownlee / Pick Up Limes / 集合）。纯公开 RSS，无需 API Key、不读 Cookie。
+
+**Twitter/X connector 重写**：从 `api.twitter.com/1.1/trends/place.json`（需 Bearer token，会失败）改为 Nitter 多实例 RSS fallback（privacydev.net → poast.org → nitter.cz）。全部失败时返回空 list，不影响其他平台。
+
+**通用 Web connector**：新建 `WebPublicConnector.kt`，用 Jsoup 解析 Hacker News / Lobsters / Techmeme 首页，对齐 OpenBiliClaw 的 `web_adapter`。
+
+**WorkManager 后台主动发现**：新建 `BackgroundDiscoveryWorker.kt`。PeriodicWorker 每 1-24h 执行（默认 6h，用户可选 1/3/6/12h）。流程：取 Top 3 兴趣 → 按主题映射平台 → 调 connector → AdaptiveRanking 评分 → 写入候选 → 发本地通知。通知 channel: `aulune-discovery` (IMPORTANCE_LOW)，点击直达 MainActivity。Constraints: 网络可用 + 不低电量。失败 LINEAR backoff 30min。
+
+**本地通知权限**：AndroidManifest 加 `POST_NOTIFICATIONS`（Android 13+）+ `RECEIVE_BOOT_COMPLETED`。
+
+**跨机器迁移（导出/导入 backup）**：新建 `BackupManager.kt`（479 行）。
+- 备份格式：`aulune-backup-YYYYMMDD-HHmmss.obcbackup` JSON 文件
+- 含 13 张表所有数据（内容 / 行为 / 兴趣 / 反馈 / 画像 / 偏好 / 对话 / 候选 / 避雷 / 心理 / 已看账本 / 发现任务 / 来源可用性）
+- **不含 API Key、Cookie、令牌**
+- 导入用 `Room.withTransaction` 保证原子性（清空+写入要么全成功要么全回滚）
+- 导入前先 validate 显示预览 + 二次确认对话框
+- 用 SAF `CreateDocument` / `OpenDocument` 走系统文件选择器
+
+### 数据库迁移
+
+Room 版本 v8 → v10（两次迁移）：
+- v8→v9：新建 3 张表（`local_avoidance_hypothesis` / `local_psychological_profile` / `local_viewed_ledger`）
+- v9→v10：`local_chat_message` 加 `turnId` 列
+
+### 新增依赖
+
+- `androidx.work:work-runtime-ktx:2.10.0` — WorkManager 后台任务
+- `org.jsoup:jsoup:1.18.1` — 通用 Web HTML 解析
+
+### 新增文件（6 个）
+
+- `AvoidanceProbe.kt` — 避雷探针
+- `PsychologicalProfile.kt` — MBTI / 认知风格 / 深层需求 / 人格素描
+- `ViewedLedgerEntity.kt` — 30 天持久化已看账本
+- `SocraticPromptPolicy.kt` — 苏格拉底式追问 prompt
+- `WebPublicConnector.kt` — 通用 Web Jsoup 抓取
+- `BackgroundDiscoveryWorker.kt` — WorkManager + 本地通知
+- `BackupManager.kt` — 跨机器迁移
+
+### 修改文件（7 个）
+
+- `LocalCore.kt` — DAO 加 39 个方法（dump + clear + bulkInsert × 13 张表），Repository 加 8 个方法，VM 加 8 个方法，2 次 Migration
+- `MainActivity.kt` — 避雷/心理画像/换一批/后台发现/备份 5 张新卡片，imports 加 9 个 icon
+- `LlmClient.kt` — `generateStream` 流式 + `generateWithFailover` failover chain + 苏格拉底 prompt
+- `LocalLibraryAndConversation.kt` — `send()` 流式 + failover + durable turnId
+- `MultiPlatformConnectors.kt` — YouTube RSS + Twitter Nitter
+- `ProfileGuidedExploration.kt` — bridges 7→19
+- `MultiPlatformContract.kt` — LibrarySection.Removed
+
+### 代码量
+
+Kotlin 总行数 14,722 → **16,802** (+2,080 / +14%)；文件数 58 → **65** (+7)；新增依赖 2 个；新增权限 2 个。
+
 ## v1.9.6 — Gemini 画像候选与日志诊断
 
 为 Gemini 云端画像候选请求启用原生 JSON 响应模式，普通对话继续使用文本响应模式；同时保留代码围栏、前后说明和常见非标准 JSON 的容错解析。不可恢复时仍只保留本机候选，不会把异常内容写入长期画像。

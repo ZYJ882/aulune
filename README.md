@@ -32,6 +32,7 @@ Aulune 使用 **Kotlin、Jetpack Compose 与 Material 3** 独立实现，应用�
 | 多服务商云端模型与智能整理 | 可配置 OpenAI、Claude、Gemini、DeepSeek、智谱 GLM、Kimi、OpenRouter 与自定义服务商；预设服务商自动采用官方默认接口格式并可编辑 HTTPS 基础地址、获取模型列表或手动填写模型名，协议选择仅对自定义服务商开放；用户可点击整理最多五条内容 |
 | 自定义品牌资源 | 独立应用名称、包名、主题与 Android 多密度启动器图标 |
 | 自动构建与发布 | 每次主分支更新或受控源码压缩包上传都会自动构建固定签名 APK、递增内部版本并创建 GitHub Release |
+| v2.0.0 本机增强 | 增加避雷探针、心理画像、对话备份、已看内容账本、后台发现任务与通用 Web 内容连接器 |
 
 ## 已复刻与未复刻的范围
 
@@ -51,7 +52,7 @@ Aulune 使用 **Kotlin、Jetpack Compose 与 Material 3** 独立实现，应用�
 
 | 版本 | 主要内容 | APK |
 |---|---|---|
-| `v1.9.6` | Gemini 画像候选 JSON 模式与诊断日志查看器 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v1.9.6) |
+| `v2.0.0` | 本机补全主动发现、避雷探针、心理画像、备份与已看账本能力 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v2.0.0) |
 | `v1.8.7` | 内容库、对话、画像直达操作优化；云端配置安全修复。临时 Debug 签名，安装前需卸载既有正式版 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v1.8.7) |
 | `v0.6.0` | 更新为“画像核心、汇入信息流与 AI 生长轨迹”图标 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.6.0) |
 | `v0.5.0` | 独立简约启动器图标 | [GitHub Release](https://github.com/ZYJ882/aulune/releases/tag/v0.5.0) |
@@ -88,16 +89,15 @@ GitHub Release 中的 APK 使用 Aulune 固定签名密钥构建。安装固定�
 ```text
 aulune/
 ├── app/src/main/java/app/aulune/mobile/
-│   ├── MainActivity.kt              # Compose 主界面、导航和交互
-│   ├── AppData.kt                   # 本地状态、模型配置与离线内容
-│   ├── LlmClient.kt                 # 可编辑端点的多协议模型调用与目录解析
-│   ├── BackgroundDiscovery.kt       # 仅手动触发的来源探测和任务账本模型
-│   ├── BilibiliLoginActivity.kt     # 认证入口的 Compose 引导页
-│   └── BilibiliWebActivity.kt       # 受控官方网页账号管理容器
-├── assets/                           # 品牌图标源图
-├── docs/model-providers.md          # 多服务商协议、端点与官方资料
-├── docs/releases/                   # 各版本发布说明
-├── historical/v0.2.0/               # 早期源码归档，不参与当前构建
+│   ├── MainActivity.kt             # Compose 主界面、导航和交互
+│   ├── AppData.kt                  # 本地状态、模型配置与离线内容
+│   ├── LlmClient.kt                # 可编辑端点的多协议模型调用与目录解析
+│   ├── BackgroundDiscovery.kt      # 仅手动触发的来源探测和任务账本模型
+│   ├── BilibiliLoginActivity.kt    # 四方式认证入口的 Compose 引导页
+│   └── BilibiliWebActivity.kt      # 受控官方网页账号管理容器
+├── assets/                          # 品牌图标源图
+├── docs/model-providers.md         # 多服务商协议、端点与官方资料
+├── docs/releases/                  # 各版本发布说明
 ├── PROJECT_SCOPE.md                 # 参考来源、功能映射和未实现边界
 └── CHANGELOG.md                     # 版本变更记录
 ```

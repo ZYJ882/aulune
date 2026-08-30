@@ -21,8 +21,8 @@ android {
         applicationId = "app.aulune.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100000047
-        versionName = "1.9.6"
+        versionCode = 100000050
+        versionName = "2.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -91,6 +91,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    // v2.0.0 第二轮：后台主动发现 + 通知 + 通用 Web HTML 解析
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("org.jsoup:jsoup:1.18.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -346,12 +346,19 @@ class WeiboPublicConnector(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  YouTube
+//  YouTube（v2.0.0 改为 RSS 真实公开 API）
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * YouTube 公开内容连接器。
- * 使用 YouTube oEmbed API 获取视频信息。
+ * YouTube 公开内容连接器（v2.0.0 升级）。
+ *
+ * v1.x：用 12 个硬编码视频 ID + oEmbed（一次只能拿 12 条且更新慢）
+ * v2.0.0：使用 YouTube 官方 RSS feed
+ *   - https://www.youtube.com/feeds/videos.xml?channel_id=...
+ *   - 完全公开无需 API Key
+ *   - 默认订阅 8 个高活跃频道覆盖科技/科普/创作/学习/生活
+ *
+ * 对齐 OpenBiliClaw：不读账号 Cookie、不调需要 API Key 的 YouTube Data API v3
  */
 class YoutubePublicConnector(
     private val client: OkHttpClient = defaultClient,
@@ -359,49 +366,74 @@ class YoutubePublicConnector(
 ) : PlatformPublicConnector {
     override val platform = ContentPlatform.YOUTUBE
 
+    /** 高活跃度公开频道，覆盖主要兴趣维度 */
+    private val seedChannels = listOf(
+        // 科技
+        "UCsXVk37bltHxD1rDPwtNM8Q" to "Kurzgesagt",        // 科普动画
+        "UC1_uNU4j7pD8i1yp-Lb65ZQ" to "集合",               // 科技
+        // 创作与设计
+        "UCYqMRVFeODJQlFnfNDBlJHg" to "The Futur",         // 设计教育
+        // 学习与知识
+        "UCsooa4yRKr_qVoMj1OyO0oQ" to " Vox",              // 科普
+        "UC6nSFpj9HTCZ5t-N3Rm3-HA" to "Vsauce",            // 科普
+        // 商业与产品
+        "UC3XTzVza9Ed3g7uoVjS7uMw" to "Y Combinator",      // 创业
+        // 生活
+        "UCddiUEpeqJcYeBxX1IVBKvQ" to "Pick Up Limes",    // 生活方式
+        // 娱乐
+        "UCBi2mrWuNuyYy4gbM6fU18Q" to "Marques Brownlee",  // 科技数码评测
+    )
+
     override suspend fun fetchPublic(page: Int, pageSize: Int): List<LocalContentEntity> =
         withContext(Dispatchers.IO) {
-            // YouTube 没有公开的热门 API，使用固定的流行视频 ID 列表
-            val popularIds = listOf(
-                "dQw4w9WgXcQ", "9bZkp7q19f0", "kJQP7kiw5Fk", "RgKAFK5djSk",
-                "fJ9rUzIMcZQ", "hT_nvWreIhg", "CevxZvSJLk8", "09R8_2nJtjg",
-                "OPf0YbXqDm0", "pRpeEdMmmQ0", "60ItHLz5WEA", "0KSOMA3QBU0",
-            )
-            popularIds.take(pageSize).mapNotNull { id ->
-                try {
-                    fetchVideoInfo(id)
-                } catch (_: Exception) {
-                    null
-                }
-            }
+            seedChannels.flatMap { (channelId, channelLabel) ->
+                try { fetchChannelFeed(channelId, channelLabel) } catch (_: Exception) { emptyList() }
+            }.sortedByDescending { it.createdAt }.take(pageSize)
         }
 
-    private fun fetchVideoInfo(videoId: String): LocalContentEntity? {
-        val url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
+    private fun fetchChannelFeed(channelId: String, channelLabel: String): List<LocalContentEntity> {
+        val url = "https://www.youtube.com/feeds/videos.xml?channel_id=$channelId"
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
             .build()
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val body = response.body?.string().orEmpty()
-            val root = json.parseToJsonElement(body).jsonObject
-            val title = root.text("title")
-            if (title.isBlank()) return null
-            val author = root.text("author_name")
-            return makeEntity(
+            if (!response.isSuccessful) return emptyList()
+            val xml = response.body?.string().orEmpty()
+            return parseRssFeed(xml, channelLabel)
+        }
+    }
+
+    /** 轻量级 RSS XML 解析；不引入完整 XML 库以保持 APK 体积 */
+    private fun parseRssFeed(xml: String, channelLabel: String): List<LocalContentEntity> {
+        val results = mutableListOf<LocalContentEntity>()
+        val entryRegex = Regex("<entry>([\\s\\S]*?)</entry>")
+        val fieldRegex = Regex("<(yt:videoId|title|published|link[^>]*|media:description|media:thumbnail[^>]*)>([^<]*)")
+        entryRegex.findAll(xml).forEach { entryMatch ->
+            val entry = entryMatch.groupValues[1]
+            val fields = fieldRegex.findAll(entry).associate { it.groupValues[1] to it.groupValues[2] }
+            val videoId = fields["yt:videoId"].orEmpty()
+            if (videoId.isBlank()) return@forEach
+            val title = fields["title"].orEmpty()
+            if (title.isBlank()) return@forEach
+            val description = fields["media:description"].orEmpty()
+            val published = fields["published"].orEmpty()
+            val thumbnail = Regex("url=['\"]([^'\"]+)['\"]")
+                .find(fields["media:thumbnail"] ?: "")?.groupValues?.getOrNull(1).orEmpty()
+            results += makeEntity(
                 platform = ContentPlatform.YOUTUBE,
                 remoteId = videoId,
                 title = title,
-                summary = "来自 YouTube 的视频。",
+                summary = description.take(200).ifBlank { "$channelLabel 的视频" },
                 url = "https://www.youtube.com/watch?v=$videoId",
-                author = author.ifBlank { "YouTube" },
-                readTime = "视频",
-                theme = classifyTheme(title, ""),
+                author = channelLabel,
+                readTime = published.take(10).ifBlank { "视频" },
+                theme = classifyTheme(title, description),
                 channel = SourceChannel.Video,
-                thumbnailUrl = root.text("thumbnail_url"),
+                thumbnailUrl = thumbnail,
             )
         }
+        return results
     }
 }
 
@@ -624,12 +656,17 @@ object PlatformConnectorFactory {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Twitter/X（单独实现，API 限制较多）
+//  Twitter/X（v2.0.0 改为 Nitter 多实例 fallback）
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * X (Twitter) 公开内容连接器。
- * 由于 X API 限制，使用 Nitter 实例或公开趋势。
+ * X (Twitter) 公开内容连接器（v2.0.0 升级）。
+ *
+ * v1.x：调 `api.twitter.com/1.1/trends/place.json`（需要 Bearer token，会失败）
+ * v2.0.0：尝试多个公开 Nitter 实例的 trending 接口，依次回退
+ *
+ * 对齐 OpenBiliClaw：不依赖 X 官方 API；如全部 Nitter 实例不可用，
+ * connector 会返回 emptyList（来源可用性记录为 Unavailable），不影响其他平台。
  */
 class TwitterPublicConnector(
     private val client: OkHttpClient = defaultClient,
@@ -637,46 +674,66 @@ class TwitterPublicConnector(
 ) : PlatformPublicConnector {
     override val platform = ContentPlatform.TWITTER
 
+    /** 公共 Nitter 实例列表；按顺序尝试，第一个成功即返回 */
+    private val nitterInstances = listOf(
+        "https://nitter.privacydev.net",
+        "https://nitter.poast.org",
+        "https://nitter.cz",
+    )
+
     override suspend fun fetchPublic(page: Int, pageSize: Int): List<LocalContentEntity> =
         withContext(Dispatchers.IO) {
-            // X 公开趋势 API（无需登录，但可能有限制）
-            val url = "https://api.twitter.com/1.1/trends/place.json?id=1"
-            val request = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .header("User-Agent", "Aulune/1.0 (Android)")
-                .build()
-            try {
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use emptyList<LocalContentEntity>()
-                    val body = response.body?.string().orEmpty()
-                    val array = json.parseToJsonElement(body).jsonArray
-                    val trends = array.firstOrNull()?.jsonObject?.get("trends")?.jsonArray
-                        ?: JsonArray(emptyList())
-                    trends.mapNotNull { it as? JsonObject }
-                        .take(pageSize)
-                        .mapNotNull { it.toTwitterContent() }
-                }
-            } catch (error: Exception) {
-                throw PlatformConnectorException(platform, error)
+            nitterInstances.forEach { base ->
+                try {
+                    val result = fetchFromNitter(base, pageSize)
+                    if (result.isNotEmpty()) return@withContext result
+                } catch (_: Exception) { /* try next */ }
             }
+            // 全部 Nitter 不可用时返回空列表，UI 会显示"未取得公开内容"
+            emptyList()
         }
 
-    private fun JsonObject.toTwitterContent(): LocalContentEntity? {
-        val name = text("name")
-        if (name.isBlank()) return null
-        val query = text("query")
-        val tweetVolume = int("tweet_volume")
-        return makeEntity(
-            platform = ContentPlatform.TWITTER,
-            remoteId = "trend_${name.hashCode()}",
-            title = name,
-            summary = "X 趋势 · 推文量 $tweetVolume",
-            url = "https://twitter.com/search?q=${java.net.URLEncoder.encode(query.ifBlank { name }, "UTF-8")}",
-            author = "X 趋势",
-            readTime = "趋势",
-            theme = classifyTheme(name, ""),
-            channel = SourceChannel.Brief,
-        )
+    private fun fetchFromNitter(base: String, pageSize: Int): List<LocalContentEntity> {
+        // Nitter 不提供 JSON API，但 RSS 是 XML，每个话题 trending 的 RSS 列表可拿
+        val url = "$base/rss/trending"
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/rss+xml, application/xml, text/xml")
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return emptyList()
+            val xml = response.body?.string().orEmpty()
+            return parseNitterTrending(xml, base).take(pageSize)
+        }
+    }
+
+    private fun parseNitterTrending(xml: String, base: String): List<LocalContentEntity> {
+        val results = mutableListOf<LocalContentEntity>()
+        val itemRegex = Regex("<item>([\\s\\S]*?)</item>")
+        val fieldRegex = Regex("<(title|link|description|pubDate)>([^<]*)")
+        itemRegex.findAll(xml).forEach { itemMatch ->
+            val item = itemMatch.groupValues[1]
+            val fields = fieldRegex.findAll(item).associate { it.groupValues[1] to it.groupValues[2] }
+            val title = fields["title"]?.trim().orEmpty()
+            if (title.isBlank()) return@forEach
+            val link = fields["link"]?.trim().orEmpty()
+            // Nitter link 是 nitter.privacydev.net/search?q=...，转换回 x.com
+            val xUrl = link.replace(base, "https://x.com")
+                .replace("/search?q=", "/search?q=")
+            val pubDate = fields["pubDate"]?.trim().orEmpty()
+            results += makeEntity(
+                platform = ContentPlatform.TWITTER,
+                remoteId = "trend_${title.hashCode()}",
+                title = title.removePrefix("#"),
+                summary = "X 趋势 · 来自 Nitter",
+                url = xUrl.ifBlank { "https://x.com/search?q=${java.net.URLEncoder.encode(title, "UTF-8")}" },
+                author = "X 趋势",
+                readTime = pubDate.take(16).ifBlank { "趋势" },
+                theme = classifyTheme(title, ""),
+                channel = SourceChannel.Brief,
+            )
+        }
+        return results
     }
 }

@@ -2,6 +2,9 @@ package app.aulune.mobile
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -14,8 +17,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.ResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -138,6 +144,114 @@ class LlmClient {
             onSuccess = { Result.success(it) },
             onFailure = { Result.failure(IOException(LlmErrorPolicy.userMessage(it), it)) }
         )
+    }
+
+    /**
+     * v2.0.0 流式 SSE 输出：逐 token 返回，UI 可实现打字机效果。
+     * - 仅支持 OpenAI 兼容协议（最广覆盖：OpenAI/OpenRouter/DeepSeek/Kimi/GLM）
+     * - Claude / Gemini 仍走 [generate]；调用方在 collect 失败时回退到 [generate]
+     * - 流以 `[DONE]` 结尾；遇到无法解析的行会忽略
+     */
+    fun generateStream(
+        provider: AiProvider,
+        settings: ProviderSettings,
+        messages: List<ConversationMessage>,
+        structuredJson: Boolean = false,
+    ): Flow<String> = callbackFlow {
+        require(settings.apiKey.isNotBlank()) { "请先填写 ${provider.displayName} API Key。" }
+        require(settings.effectiveBaseUrl(provider).startsWith("https://")) { "接口地址必须使用 HTTPS。" }
+        val model = settings.effectiveModel(provider)
+        require(model.isNotBlank()) { "请填写模型名称。" }
+
+        if (settings.effectiveProtocol(provider) != ProviderProtocol.OpenAiCompatible) {
+            // 非 OpenAI 兼容协议不支持流式，回退到一次性返回
+            val result = generate(provider, settings, messages, structuredJson)
+            result.onSuccess { trySend(it) }
+            result.onFailure { close(IOException(LlmErrorPolicy.userMessage(it), it)) }
+            close()
+            return@callbackFlow
+        }
+
+        val payload = JSONObject().apply {
+            put("model", model)
+            put("messages", openAiMessages(messages))
+            put("temperature", 0.7)
+            put("stream", true)
+            if (structuredJson) put("response_format", JSONObject().put("type", "json_object"))
+        }
+        val request = baseRequest(chatUrl(settings.effectiveBaseUrl(provider)), payload)
+            .header("Authorization", "Bearer ${settings.apiKey.trim()}")
+            .build()
+
+        val call = client.newCall(request)
+        val response = try { call.execute() } catch (e: IOException) {
+            close(IOException(LlmErrorPolicy.userMessage(e), e)); return@callbackFlow
+        }
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                close(IOException("HTTP ${resp.code}：${resp.message}")); return@callbackFlow
+            }
+            val body: ResponseBody = resp.body ?: run {
+                close(IOException("流式响应无 body")); return@callbackFlow
+            }
+            val reader = BufferedReader(body.charStream())
+            try {
+                val buffer = StringBuilder()
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isBlank() || line.startsWith(":")) continue
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    if (data.isEmpty()) continue
+                    val parsed = parseStreamChunk(data)
+                    if (parsed.isNotEmpty()) {
+                        trySend(parsed)
+                        buffer.append(parsed)
+                    }
+                }
+            } catch (e: Exception) {
+                close(IOException("流式读取中断：${e.message ?: "未知错误"}", e)); return@callbackFlow
+            }
+            close()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private fun parseStreamChunk(data: String): String {
+        return runCatching {
+            val json = JSONObject(data)
+            val choices = json.optJSONArray("choices") ?: return@runCatching ""
+            if (choices.length() == 0) return@runCatching ""
+            val choice = choices.optJSONObject(0) ?: return@runCatching ""
+            val delta = choice.optJSONObject("delta") ?: return@runCatching ""
+            delta.optString("content", "")
+        }.getOrDefault("")
+    }
+
+    /**
+     * v2.0.0 LLM failover chain：按顺序尝试主 provider + 备选 providers，
+     * 第一个成功即返回；全部失败时返回最后一个错误。
+     *
+     * 对齐 OpenBiliClaw 的"同类型 LLM 多渠道故障切换链"。
+     * 调用方从 AuluneStore.providerSettings 里筛出所有已配置 Key 的 providers 传入。
+     */
+    suspend fun generateWithFailover(
+        primary: Pair<AiProvider, ProviderSettings>,
+        alternatives: List<Pair<AiProvider, ProviderSettings>>,
+        messages: List<ConversationMessage>,
+        structuredJson: Boolean = false,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val chain = listOf(primary) + alternatives.filter { it.first != primary.first }
+        var lastError: Throwable? = null
+        for ((provider, settings) in chain) {
+            if (settings.apiKey.isBlank()) continue
+            val result = generate(provider, settings, messages, structuredJson)
+            if (result.isSuccess) {
+                return@withContext result
+            }
+            lastError = result.exceptionOrNull()
+        }
+        Result.failure(lastError ?: IOException("无可用的 LLM provider；请先在“模型”页配置 API Key。"))
     }
 
     private suspend fun retryTransient(block: () -> String): String {
@@ -281,6 +395,7 @@ class LlmClient {
     }
 
     private companion object {
-        const val systemPrompt = "你是Aulune的专注思考助手。请使用用户输入的语言，给出清晰、可靠、可执行的回答；当信息不足时先说明假设，不要编造事实。"
+        // v2.0.0：升级为苏格拉底式追问 system prompt
+        const val systemPrompt = SocraticPromptPolicy.conversationalSystemPrompt.trim()
     }
 }

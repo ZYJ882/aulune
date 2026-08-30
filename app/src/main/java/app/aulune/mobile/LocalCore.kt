@@ -106,13 +106,18 @@ data class LocalPreferenceEntity(
     val updatedAt: Long
 )
 
-/** 对话历史只保存于本机，用于让用户在重启后继续同一段思考。 */
+/** 对话历史只保存于本机，用于让用户在重启后继续同一段思考。
+ *  v2.0.0 增加 turnId 字段，对齐 OpenBiliClaw 的 durable turn_id：
+ *  同一段对话的"用户消息 + 助手回复"共享同一个 turnId，即使重试或切换 provider，
+ *  也能用 turnId 找回该轮的完整上下文。 */
 @Entity(tableName = "local_chat_message")
 data class LocalChatMessageEntity(
     @androidx.room.PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val fromUser: Boolean,
     val text: String,
-    val createdAt: Long
+    val createdAt: Long,
+    /** v2.0.0 durable turn_id；同一轮的 user+assistant 共享 */
+    val turnId: String = "",
 )
 
 @Dao
@@ -290,6 +295,185 @@ interface LocalCoreDao {
 
     @Query("UPDATE local_discovery_task SET status = 'Cancelled', finishedAt = :finishedAt, detail = :detail WHERE status IN ('Queued', 'Running')")
     suspend fun cancelActiveDiscoveryTasks(finishedAt: Long, detail: String)
+
+    // ═══════════════════════════════════════════════════════════
+    //  避雷探针 v2.0.0
+    // ═══════════════════════════════════════════════════════════
+    @Query("SELECT * FROM local_avoidance_hypothesis ORDER BY createdAt DESC")
+    fun observeAvoidanceHypotheses(): Flow<List<AvoidanceHypothesisEntity>>
+
+    @Query("SELECT * FROM local_avoidance_hypothesis ORDER BY createdAt DESC")
+    suspend fun avoidanceHypothesesNow(): List<AvoidanceHypothesisEntity>
+
+    @Query("SELECT * FROM local_avoidance_hypothesis WHERE id = :id LIMIT 1")
+    suspend fun avoidanceHypothesis(id: String): AvoidanceHypothesisEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAvoidanceHypotheses(items: List<AvoidanceHypothesisEntity>)
+
+    @Query("UPDATE local_avoidance_hypothesis SET status = :status, decidedAt = :decidedAt WHERE id = :id")
+    suspend fun decideAvoidanceHypothesis(id: String, status: String, decidedAt: Long)
+
+    @Query("DELETE FROM local_avoidance_hypothesis")
+    suspend fun clearAvoidanceHypotheses()
+
+    // ═══════════════════════════════════════════════════════════
+    //  心理学画像 v2.0.0（MBTI / 认知风格 / 深层需求 / 人格素描）
+    // ═══════════════════════════════════════════════════════════
+    @Query("SELECT * FROM local_psychological_profile ORDER BY dimension ASC")
+    fun observePsychologicalProfiles(): Flow<List<PsychologicalProfileEntity>>
+
+    @Query("SELECT * FROM local_psychological_profile ORDER BY dimension ASC")
+    suspend fun psychologicalProfilesNow(): List<PsychologicalProfileEntity>
+
+    @Query("SELECT * FROM local_psychological_profile WHERE dimension = :dimension LIMIT 1")
+    suspend fun psychologicalProfile(dimension: String): PsychologicalProfileEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPsychologicalProfiles(items: List<PsychologicalProfileEntity>)
+
+    @Query("UPDATE local_psychological_profile SET candidate = :candidate, candidateDetail = :detail, confirmationState = 'pending', updatedAt = :now, revision = revision + 1 WHERE dimension = :dimension")
+    suspend fun applyPsychologicalCandidate(dimension: String, candidate: String, detail: String, now: Long)
+
+    @Query("UPDATE local_psychological_profile SET summary = :summary, detail = :detail, candidate = '', candidateDetail = '', confirmationState = 'confirmed', updatedAt = :now, revision = revision + 1 WHERE dimension = :dimension")
+    suspend fun confirmPsychologicalProfile(dimension: String, summary: String, detail: String, now: Long)
+
+    @Query("DELETE FROM local_psychological_profile WHERE dimension = :dimension")
+    suspend fun deletePsychologicalProfile(dimension: String)
+
+    // ═══════════════════════════════════════════════════════════
+    //  已看账本 v2.0.0（三层去重：当前批 / 本会话 / 30 天持久化）
+    // ═══════════════════════════════════════════════════════════
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertViewedLedger(items: List<ViewedLedgerEntity>)
+
+    @Query("SELECT contentKey FROM local_viewed_ledger WHERE viewedAt >= :since")
+    suspend fun viewedKeysSince(since: Long): List<String>
+
+    @Query("DELETE FROM local_viewed_ledger WHERE viewedAt < :before")
+    suspend fun pruneViewedLedger(before: Long)
+
+    // ═══════════════════════════════════════════════════════════
+    //  v2.0.0 跨机器迁移 · 全表导出/导入
+    // ═══════════════════════════════════════════════════════════
+
+    @Query("SELECT * FROM local_content")
+    suspend fun dumpAllContent(): List<LocalContentEntity>
+
+    @Query("SELECT * FROM behavior_event")
+    suspend fun dumpAllEvents(): List<BehaviorEventEntity>
+
+    @Query("SELECT * FROM interest")
+    suspend fun dumpAllInterests(): List<InterestEntity>
+
+    @Query("SELECT * FROM local_feedback")
+    suspend fun dumpAllFeedback(): List<LocalFeedbackEntity>
+
+    @Query("SELECT * FROM local_profile")
+    suspend fun dumpAllProfiles(): List<LocalProfileEntity>
+
+    @Query("SELECT * FROM local_preference")
+    suspend fun dumpAllPreferences(): List<LocalPreferenceEntity>
+
+    @Query("SELECT * FROM local_chat_message")
+    suspend fun dumpAllChatMessages(): List<LocalChatMessageEntity>
+
+    @Query("SELECT * FROM local_interest_hypothesis")
+    suspend fun dumpAllInterestHypotheses(): List<InterestHypothesisEntity>
+
+    @Query("SELECT * FROM local_avoidance_hypothesis")
+    suspend fun dumpAllAvoidanceHypotheses(): List<AvoidanceHypothesisEntity>
+
+    @Query("SELECT * FROM local_psychological_profile")
+    suspend fun dumpAllPsychologicalProfiles(): List<PsychologicalProfileEntity>
+
+    @Query("SELECT * FROM local_viewed_ledger")
+    suspend fun dumpAllViewedLedger(): List<ViewedLedgerEntity>
+
+    @Query("SELECT * FROM local_discovery_task")
+    suspend fun dumpAllDiscoveryTasks(): List<DiscoveryTaskEntity>
+
+    @Query("SELECT * FROM source_availability")
+    suspend fun dumpAllSourceAvailability(): List<SourceAvailabilityEntity>
+
+    /** 危险操作：清空所有用户数据表；导入前调用 */
+    @Query("DELETE FROM local_content")
+    suspend fun clearContent()
+
+    @Query("DELETE FROM behavior_event")
+    suspend fun clearEvents()
+
+    @Query("DELETE FROM interest")
+    suspend fun clearInterests()
+
+    @Query("DELETE FROM local_feedback")
+    suspend fun clearFeedback()
+
+    @Query("DELETE FROM local_profile")
+    suspend fun clearProfiles()
+
+    @Query("DELETE FROM local_preference")
+    suspend fun clearPreferences()
+
+    @Query("DELETE FROM local_chat_message")
+    suspend fun clearChatMessages()
+
+    @Query("DELETE FROM local_interest_hypothesis")
+    suspend fun clearInterestHypotheses()
+
+    @Query("DELETE FROM local_avoidance_hypothesis")
+    suspend fun clearAvoidanceHypotheses()
+
+    @Query("DELETE FROM local_psychological_profile")
+    suspend fun clearPsychologicalProfiles()
+
+    @Query("DELETE FROM local_viewed_ledger")
+    suspend fun clearViewedLedger()
+
+    @Query("DELETE FROM local_discovery_task")
+    suspend fun clearDiscoveryTasks()
+
+    @Query("DELETE FROM source_availability")
+    suspend fun clearSourceAvailability()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertContent(items: List<LocalContentEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertEvents(items: List<BehaviorEventEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertInterests(items: List<InterestEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertFeedback(items: List<LocalFeedbackEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertProfiles(items: List<LocalProfileEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertPreferences(items: List<LocalPreferenceEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertChatMessages(items: List<LocalChatMessageEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertInterestHypotheses(items: List<InterestHypothesisEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertAvoidanceHypotheses(items: List<AvoidanceHypothesisEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertPsychologicalProfiles(items: List<PsychologicalProfileEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertViewedLedger(items: List<ViewedLedgerEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertDiscoveryTasks(items: List<DiscoveryTaskEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun bulkInsertSourceAvailability(items: List<SourceAvailabilityEntity>)
 }
 
 @Database(
@@ -303,9 +487,12 @@ interface LocalCoreDao {
         LocalChatMessageEntity::class,
         InterestHypothesisEntity::class,
         DiscoveryTaskEntity::class,
-        SourceAvailabilityEntity::class
+        SourceAvailabilityEntity::class,
+        AvoidanceHypothesisEntity::class,
+        PsychologicalProfileEntity::class,
+        ViewedLedgerEntity::class
     ],
-    version = 8,
+    version = 10,
     exportSchema = false
 )
 abstract class AuluneLocalDatabase : RoomDatabase() {
@@ -372,11 +559,27 @@ abstract class AuluneLocalDatabase : RoomDatabase() {
             }
         }
 
+        private val Migration8To9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_avoidance_hypothesis (id TEXT NOT NULL, candidatePattern TEXT NOT NULL, sourceTheme TEXT NOT NULL, origin TEXT NOT NULL, reason TEXT NOT NULL, evidenceCount INTEGER NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, expiresAt INTEGER NOT NULL, decidedAt INTEGER NOT NULL, PRIMARY KEY(id))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_avoidance_hypothesis_status ON local_avoidance_hypothesis(status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_local_avoidance_hypothesis_createdAt ON local_avoidance_hypothesis(createdAt)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_psychological_profile (dimension TEXT NOT NULL, summary TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', candidate TEXT NOT NULL DEFAULT '', candidateDetail TEXT NOT NULL DEFAULT '', evidenceCount INTEGER NOT NULL DEFAULT 0, confirmationState TEXT NOT NULL DEFAULT 'automatic', updatedAt INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(dimension))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS local_viewed_ledger (contentKey TEXT NOT NULL, viewedAt INTEGER NOT NULL, PRIMARY KEY(contentKey))")
+            }
+        }
+
+        private val Migration9To10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE local_chat_message ADD COLUMN turnId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun create(context: Context): AuluneLocalDatabase = Room.databaseBuilder(
             context.applicationContext,
             AuluneLocalDatabase::class.java,
             "aulune-local.db"
-        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8).build()
+        ).addMigrations(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10).build()
     }
 }
 
@@ -433,6 +636,11 @@ data class LocalFeedUiState(
     val backgroundDiscovery: BackgroundDiscoveryUiState = BackgroundDiscoveryUiState(),
     val agentRun: AgentRunUiState = AgentRunUiState(),
     val agentSnapshot: AgentCognitiveSnapshot = AgentCognitiveSnapshot(emptyList(), emptyList(), 0, 0L),
+    // v2.0.0 新增
+    val avoidance: List<AvoidanceHypothesisUi> = emptyList(),
+    val psychological: List<PsychologicalProfileUi> = emptyList(),
+    val reshuffleAvailable: Int = 0,
+    val isReshuffling: Boolean = false,
 )
 
 internal data class CloudProfileInput(
@@ -457,7 +665,9 @@ internal data class RankingSnapshot(
     val events: List<BehaviorEventEntity>,
     val feedback: List<LocalFeedbackEntity>,
     val profiles: List<LocalProfileEntity> = emptyList(),
-    val hypotheses: List<InterestHypothesisEntity> = emptyList()
+    val hypotheses: List<InterestHypothesisEntity> = emptyList(),
+    val avoidance: List<AvoidanceHypothesisEntity> = emptyList(),
+    val psychological: List<PsychologicalProfileEntity> = emptyList(),
 )
 
 internal class LocalCoreRepository(private val dao: LocalCoreDao) {
@@ -539,8 +749,19 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         ) { content, savedCount, interests, events, feedback ->
             RankingSnapshot(content, savedCount, interests, events, feedback)
         }
-        return combine(core, dao.observeProfiles(), dao.observeInterestHypotheses()) { snapshot, profiles, hypotheses ->
-            snapshot.copy(profiles = profiles, hypotheses = hypotheses)
+        return combine(
+            core,
+            dao.observeProfiles(),
+            dao.observeInterestHypotheses(),
+            dao.observeAvoidanceHypotheses(),
+            dao.observePsychologicalProfiles(),
+        ) { snapshot, profiles, hypotheses, avoidance, psychological ->
+            snapshot.copy(
+                profiles = profiles,
+                hypotheses = hypotheses,
+                avoidance = avoidance,
+                psychological = psychological,
+            )
         }
     }
 
@@ -584,6 +805,8 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
             feedback = dao.allFeedback(),
             profiles = dao.profilesNow(),
             hypotheses = dao.interestHypothesesNow(),
+            avoidance = dao.avoidanceHypothesesNow(),
+            psychological = dao.psychologicalProfilesNow(),
         )
         return AuluneAgentPolicy.synthesize(snapshot)
     }
@@ -598,6 +821,94 @@ internal class LocalCoreRepository(private val dao: LocalCoreDao) {
         if (layer !in setOf(ProfileLayer.Values, ProfileLayer.Core)) return
         dao.deleteProfile(layer.name)
         rebuildProfiles(force = true)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  避雷探针 v2.0.0
+    // ═══════════════════════════════════════════════════════════
+
+    suspend fun refreshAvoidanceHypotheses() {
+        val now = System.currentTimeMillis()
+        val existing = dao.avoidanceHypothesesNow()
+        val expired = AvoidanceProbePolicy.expire(existing, now)
+        if (expired.any { it.id != existing.firstOrNull { e -> e.id == it.id }?.id || it.status != existing.firstOrNull { e -> e.id == it.id }?.status }) {
+            dao.upsertAvoidanceHypotheses(expired)
+        }
+        val fresh = AvoidanceProbePolicy.propose(
+            feedback = dao.allFeedback(),
+            contents = dao.allContent(),
+            existing = expired,
+            now = now,
+        )
+        if (fresh.isNotEmpty()) dao.upsertAvoidanceHypotheses(fresh)
+    }
+
+    suspend fun decideAvoidanceHypothesis(id: String, status: AvoidanceHypothesisStatus) {
+        val now = System.currentTimeMillis()
+        dao.decideAvoidanceHypothesis(id, status.name, now)
+    }
+
+    suspend fun avoidanceHypothesesNow(): List<AvoidanceHypothesisEntity> = dao.avoidanceHypothesesNow()
+
+    // ═══════════════════════════════════════════════════════════
+    //  心理学画像 v2.0.0
+    // ═══════════════════════════════════════════════════════════
+
+    suspend fun refreshPsychologicalCandidates() {
+        val now = System.currentTimeMillis()
+        val interests = dao.interestsNow()
+        val existing = dao.psychologicalProfilesNow()
+        val candidates = PsychologicalBridges.generateCandidates(interests, existing, now)
+        if (candidates.isNotEmpty()) dao.upsertPsychologicalProfiles(candidates)
+    }
+
+    suspend fun applyCloudPsychologicalCandidate(dimension: PsychologicalDimension, summary: String, detail: String) {
+        val now = System.currentTimeMillis()
+        val cur = dao.psychologicalProfile(dimension.name)
+        if (cur == null) {
+            dao.upsertPsychologicalProfiles(listOf(
+                PsychologicalProfileEntity(
+                    dimension = dimension.name,
+                    summary = "",
+                    detail = "",
+                    candidate = summary,
+                    candidateDetail = detail,
+                    evidenceCount = 0,
+                    confirmationState = "pending",
+                    updatedAt = now,
+                )
+            ))
+        } else {
+            dao.applyPsychologicalCandidate(dimension.name, summary, detail, now)
+        }
+    }
+
+    suspend fun confirmPsychologicalProfile(dimension: PsychologicalDimension) {
+        val cur = dao.psychologicalProfile(dimension.name) ?: return
+        if (cur.candidate.isBlank()) return
+        dao.confirmPsychologicalProfile(dimension.name, cur.candidate, cur.candidateDetail, System.currentTimeMillis())
+    }
+
+    suspend fun resetPsychologicalProfile(dimension: PsychologicalDimension) {
+        dao.deletePsychologicalProfile(dimension.name)
+    }
+
+    suspend fun psychologicalProfilesNow(): List<PsychologicalProfileEntity> = dao.psychologicalProfilesNow()
+
+    // ═══════════════════════════════════════════════════════════
+    //  已看账本 v2.0.0
+    // ═══════════════════════════════════════════════════════════
+
+    suspend fun viewedKeysInRetention(): Set<String> {
+        val since = System.currentTimeMillis() - ViewedLedgerPolicy.RetentionMillis
+        return dao.viewedKeysSince(since).toSet()
+    }
+
+    suspend fun recordViewed(contentKeys: List<String>) {
+        if (contentKeys.isEmpty()) return
+        val now = System.currentTimeMillis()
+        dao.upsertViewedLedger(contentKeys.map { ViewedLedgerEntity(it, now) })
+        dao.pruneViewedLedger(now - ViewedLedgerPolicy.RetentionMillis)
     }
 
     suspend fun importBilibiliPopular(): Int = importContent(BilibiliPublicConnector().fetchPopular())
@@ -996,6 +1307,10 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
     private val _platformLoginStatus = MutableStateFlow<Map<ContentPlatform, String>>(emptyMap())
     private val manualDiscoveryRunning = MutableStateFlow(false)
     private val backgroundDiscoveryNotice = MutableStateFlow("仅在你点击“立即探测公开来源”后执行；不会在后台自动联网。")
+    // v2.0.0 三层去重：第二层 sessionViewed（本会话已看），第三层持久化 viewedLedger 由 Repository 维护
+    private val sessionViewedKeys = MutableStateFlow<Set<String>>(emptySet())
+    private val persistentViewedKeys = MutableStateFlow<Set<String>>(emptySet())
+    private val _isReshuffling = MutableStateFlow(false)
     private val backgroundDiscovery = combine(
         repository.observeDiscoveryTasks(),
         repository.observeSourceAvailability(),
@@ -1022,16 +1337,21 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         rotation,
         bilibiliSync,
         sessionIntent,
-        integrationState
-    ) { snapshot, rotationIndex, sync, intent, integration ->
+        integrationState,
+        sessionViewedKeys,
+        persistentViewedKeys,
+    ) { snapshot, rotationIndex, sync, intent, integration, sessionViewed, persistentViewed ->
         val cloud = integration.cloud
         val platformSyncing = integration.syncing
         val platformStatus = integration.syncStatus
         val platformLoginStatus = integration.loginStatus
         val backgroundDiscovery = integration.backgroundDiscovery
+        // 三层去重：当前批 + 本会话 + 30 天持久化
+        val excluded = sessionViewed + persistentViewed
         val ordered = snapshot.content
             .map(LocalAdaptiveCore::normalize)
             .filterNot { LocalAdaptiveCore.shouldExclude(it, snapshot.feedback) }
+            .filterNot { it.contentKey in excluded }
             .map { item -> item to AuluneAgentPolicy.evaluate(item, snapshot, rotationIndex, intent).score }
             .sortedByDescending { it.second }
             .map { (item, _) -> item.toCuratedItem(snapshot.interests, snapshot.feedback, snapshot.events) }
@@ -1064,6 +1384,10 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             backgroundDiscovery = backgroundDiscovery,
             agentRun = integration.agentRun,
             agentSnapshot = AuluneAgentPolicy.synthesize(snapshot),
+            avoidance = snapshot.avoidance.map { it.toUi() },
+            psychological = snapshot.psychological.map { it.toUi() },
+            reshuffleAvailable = ordered.size,
+            isReshuffling = _isReshuffling.value,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocalFeedUiState())
 
@@ -1073,6 +1397,11 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
             sessionIntent.value = repository.loadIntent()
             repository.ensureSeedContent()
             repository.applyInterestLifecycle()
+            // 加载持久化已看账本作为初始排除集
+            persistentViewedKeys.value = repository.viewedKeysInRetention()
+            // 启动时刷新避雷和心理画像候选
+            repository.refreshAvoidanceHypotheses()
+            repository.refreshPsychologicalCandidates()
             refreshPlatformStatuses()
         }
     }
@@ -1085,7 +1414,77 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun rotateFeed() { rotation.value += 1 }
+    /**
+     * "换一批"三层去重真实现：把当前显示的 N 条加入 sessionViewed + 持久化账本，
+     * 然后让 rotation 触发重新排序。后续会从剩余候选中重新取前 N。
+     *
+     * 三层去重对齐 OpenBiliClaw 的设计：
+     * - 第一层：当前批 items.contentKey（即将被排除）
+     * - 第二层：本会话已看 sessionViewedKeys
+     * - 第三层：30 天持久化账本 viewedLedger
+     */
+    fun rotateFeed() = reshuffleFeed()
+
+    fun reshuffleFeed() {
+        val currentItems = uiState.value.items
+        if (currentItems.isEmpty()) {
+            rotation.value += 1
+            return
+        }
+        if (_isReshuffling.value) return
+        _isReshuffling.value = true
+        viewModelScope.launch {
+            val keysToExclude = currentItems.take(ViewedLedgerPolicy.ReshuffleBatchSize).map { it.contentKey }
+            // 第二层：本会话已看
+            sessionViewedKeys.value = sessionViewedKeys.value + keysToExclude
+            // 第三层：持久化 30 天
+            repository.recordViewed(keysToExclude)
+            persistentViewedKeys.value = repository.viewedKeysInRetention()
+            // 触发重新排序
+            rotation.value += 1
+            diagnostics.record("INFO", "换一批：已排除 ${keysToExclude.size} 条；本会话累计 ${sessionViewedKeys.value.size} 条，30 天账本累计 ${persistentViewedKeys.value.size} 条。")
+            _isReshuffling.value = false
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  避雷探针 v2.0.0
+    // ═══════════════════════════════════════════════════════════
+
+    fun refreshAvoidance() {
+        viewModelScope.launch {
+            repository.refreshAvoidanceHypotheses()
+        }
+    }
+
+    fun decideAvoidance(id: String, status: AvoidanceHypothesisStatus) {
+        viewModelScope.launch {
+            repository.decideAvoidanceHypothesis(id, status)
+            diagnostics.record("INFO", "避雷候选 $id 决策为 ${status.label}")
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  心理学画像 v2.0.0
+    // ═══════════════════════════════════════════════════════════
+
+    fun refreshPsychological() {
+        viewModelScope.launch { repository.refreshPsychologicalCandidates() }
+    }
+
+    fun confirmPsychologicalProfile(dimension: PsychologicalDimension) {
+        viewModelScope.launch {
+            repository.confirmPsychologicalProfile(dimension)
+            diagnostics.record("INFO", "心理学画像 ${dimension.label} 已确认")
+        }
+    }
+
+    fun resetPsychologicalProfile(dimension: PsychologicalDimension) {
+        viewModelScope.launch {
+            repository.resetPsychologicalProfile(dimension)
+            repository.refreshPsychologicalCandidates()
+        }
+    }
 
     fun runBackgroundDiscoveryNow() {
         if (manualDiscoveryRunning.value) return
