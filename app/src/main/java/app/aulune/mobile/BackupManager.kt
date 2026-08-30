@@ -242,7 +242,7 @@ object BackupManager {
                 sourceAvailability = sourceAvailability.map { it.toJson() },
             )
 
-            val jsonStr = json.encodeToString(BackupPayload.serializer(), payload)
+            val jsonStr = json.encodeToString(payload)
             val bytes = jsonStr.toByteArray(Charsets.UTF_8)
 
             context.contentResolver.openOutputStream(targetUri)?.use { out ->
@@ -359,7 +359,7 @@ object BackupManager {
         val jsonStr = context.contentResolver.openInputStream(sourceUri)?.use { input ->
             input.bufferedReader(Charsets.UTF_8).readText()
         } ?: throw IOException("无法读取备份文件")
-        return json.decodeFromString(BackupPayload.serializer(), jsonStr)
+        return json.decodeFromString<BackupPayload>(jsonStr)
     }
 
     // ═══════════════════════════════════════════════════════════

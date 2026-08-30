@@ -1444,7 +1444,7 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         if (_isReshuffling.value) return
         _isReshuffling.value = true
         viewModelScope.launch {
-            val keysToExclude = currentItems.take(ViewedLedgerPolicy.ReshuffleBatchSize).map { it.contentKey }
+            val keysToExclude = currentItems.take(ViewedLedgerPolicy.ReshuffleBatchSize).map { it.id }
             // 第二层：本会话已看
             sessionViewedKeys.value = sessionViewedKeys.value + keysToExclude
             // 第三层：持久化 30 天

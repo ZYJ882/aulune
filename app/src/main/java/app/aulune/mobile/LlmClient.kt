@@ -396,6 +396,6 @@ class LlmClient {
 
     private companion object {
         // v2.0.0：升级为苏格拉底式追问 system prompt
-        const val systemPrompt = SocraticPromptPolicy.conversationalSystemPrompt.trim()
+        val systemPrompt = SocraticPromptPolicy.conversationalSystemPrompt.trim()
     }
 }
