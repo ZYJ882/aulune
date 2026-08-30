@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -314,9 +315,6 @@ interface LocalCoreDao {
     @Query("UPDATE local_avoidance_hypothesis SET status = :status, decidedAt = :decidedAt WHERE id = :id")
     suspend fun decideAvoidanceHypothesis(id: String, status: String, decidedAt: Long)
 
-    @Query("DELETE FROM local_avoidance_hypothesis")
-    suspend fun clearAvoidanceHypotheses()
-
     // ═══════════════════════════════════════════════════════════
     //  心理学画像 v2.0.0（MBTI / 认知风格 / 深层需求 / 人格素描）
     // ═══════════════════════════════════════════════════════════
@@ -403,9 +401,6 @@ interface LocalCoreDao {
     @Query("DELETE FROM behavior_event")
     suspend fun clearEvents()
 
-    @Query("DELETE FROM interest")
-    suspend fun clearInterests()
-
     @Query("DELETE FROM local_feedback")
     suspend fun clearFeedback()
 
@@ -414,12 +409,6 @@ interface LocalCoreDao {
 
     @Query("DELETE FROM local_preference")
     suspend fun clearPreferences()
-
-    @Query("DELETE FROM local_chat_message")
-    suspend fun clearChatMessages()
-
-    @Query("DELETE FROM local_interest_hypothesis")
-    suspend fun clearInterestHypotheses()
 
     @Query("DELETE FROM local_avoidance_hypothesis")
     suspend fun clearAvoidanceHypotheses()
@@ -656,6 +645,15 @@ private data class PlatformIntegrationState(
     val loginStatus: Map<ContentPlatform, String>,
     val backgroundDiscovery: BackgroundDiscoveryUiState,
     val agentRun: AgentRunUiState,
+)
+
+private data class LocalFeedInputs(
+    val snapshot: RankingSnapshot,
+    val rotationIndex: Int,
+    val sync: BilibiliSyncUiState,
+    val intent: SessionIntent,
+    val integration: PlatformIntegrationState,
+    val excluded: Set<String>,
 )
 
 internal data class RankingSnapshot(
@@ -1332,22 +1330,34 @@ class LocalFeedViewModel(application: Application) : AndroidViewModel(applicatio
         state.copy(agentRun = agentState)
     }
 
-    val uiState: StateFlow<LocalFeedUiState> = combine(
+    private val feedInputs = combine(
         repository.observeRankingSnapshot(),
         rotation,
         bilibiliSync,
         sessionIntent,
         integrationState,
-        sessionViewedKeys,
-        persistentViewedKeys,
-    ) { snapshot, rotationIndex, sync, intent, integration, sessionViewed, persistentViewed ->
+    ) { snapshot, rotationIndex, sync, intent, integration ->
+        LocalFeedInputs(snapshot, rotationIndex, sync, intent, integration, emptySet())
+    }
+
+    val uiState: StateFlow<LocalFeedUiState> = combine(
+        feedInputs,
+        combine(sessionViewedKeys, persistentViewedKeys) { sessionViewed, persistentViewed ->
+            sessionViewed + persistentViewed
+        },
+    ) { input, excluded -> input.copy(excluded = excluded) }.map { input ->
+        val snapshot = input.snapshot
+        val rotationIndex = input.rotationIndex
+        val sync = input.sync
+        val intent = input.intent
+        val integration = input.integration
         val cloud = integration.cloud
         val platformSyncing = integration.syncing
         val platformStatus = integration.syncStatus
         val platformLoginStatus = integration.loginStatus
         val backgroundDiscovery = integration.backgroundDiscovery
         // 三层去重：当前批 + 本会话 + 30 天持久化
-        val excluded = sessionViewed + persistentViewed
+        val excluded = input.excluded
         val ordered = snapshot.content
             .map(LocalAdaptiveCore::normalize)
             .filterNot { LocalAdaptiveCore.shouldExclude(it, snapshot.feedback) }

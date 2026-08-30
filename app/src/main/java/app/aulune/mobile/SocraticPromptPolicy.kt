@@ -45,7 +45,7 @@ object SocraticPromptPolicy {
         appendLine("从以下用户对话中提取 1-3 个潜在的兴趣候选方向。")
         appendLine("要求：")
         appendLine("- 候选必须是用户提到但当前兴趣列表中不存在的主题，或对已有主题的更精确表达。")
-        appendLine("- 每个候选给出"为什么"的简短解释（不超过 30 字），解释要包含对话中的具体证据。")
+        appendLine("- 每个候选给出“为什么”的简短解释（不超过 30 字），解释要包含对话中的具体证据。")
         appendLine("- 不要返回用户明确否定的方向。")
         appendLine("- 返回纯 JSON 数组，每项形如：")
         appendLine("""  [{"theme":"主题·子方向","reason":"对话中用户提到XXX，且表现出持续关注"}]""")

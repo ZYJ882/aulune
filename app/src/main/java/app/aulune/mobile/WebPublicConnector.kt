@@ -65,7 +65,7 @@ class WebPublicConnector(
             if (!href.startsWith("http")) return@forEach
             // 抓 og:description 作为摘要
             val metaDesc = doc.selectFirst("meta[property=og:description]")?.attr("content").orEmpty()
-            val now = nowMillis()
+            val now = System.currentTimeMillis()
             items += LocalContentEntity(
                 contentKey = "web:${href.hashCode()}",
                 source = "${seed.label} · Web",
@@ -73,10 +73,10 @@ class WebPublicConnector(
                 title = title,
                 readTime = "网页",
                 summary = metaDesc.ifBlank { "来自 ${seed.label} 的资讯。" },
-                theme = classifyTheme(title, metaDesc),
+                theme = webClassifyTheme(title, metaDesc),
                 url = href,
-                gradientStart = platformGradientStart(title, ContentPlatform.BILIBILI),
-                gradientEnd = platformGradientEnd(title, ContentPlatform.BILIBILI),
+                gradientStart = webGradientStart(webClassifyTheme(title, metaDesc)),
+                gradientEnd = webGradientEnd(webClassifyTheme(title, metaDesc)),
                 createdAt = now,
                 updatedAt = now,
                 sourceKey = "web",
@@ -84,6 +84,30 @@ class WebPublicConnector(
             )
         }
         return items
+    }
+
+    private fun webClassifyTheme(title: String, summary: String): String {
+        val text = "$title $summary".lowercase()
+        return when {
+            listOf("ai", "人工智能", "machine learning", "technology", "programming", "code").any(text::contains) -> "技术 · AI"
+            listOf("business", "startup", "market", "finance", "company").any(text::contains) -> "商业 · 决策"
+            listOf("design", "creative", "music", "art").any(text::contains) -> "创作 · 表达"
+            else -> "综合 · 热门"
+        }
+    }
+
+    private fun webGradientStart(theme: String): Long = when {
+        theme.contains("技术") -> 0xFF283B77
+        theme.contains("商业") -> 0xFF1E5E59
+        theme.contains("创作") -> 0xFF7A304E
+        else -> 0xFF496A92
+    }
+
+    private fun webGradientEnd(theme: String): Long = when {
+        theme.contains("技术") -> 0xFF5C8FE8
+        theme.contains("商业") -> 0xFF55B8A9
+        theme.contains("创作") -> 0xFFE07093
+        else -> 0xFF8AA6C8
     }
 
     private data class WebSeed(
